@@ -25,12 +25,12 @@ class PolymerPriceBot:
         """Build the telegram bot application"""
         self.app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
 
-        # Add handlers
-        self.app.add_handler(CommandHandler("start", self.start_command))
-        self.app.add_handler(CommandHandler("help", self.help_command))
-        self.app.add_handler(CommandHandler("list", self.list_polymers_command))
+        # Add handlers - only respond to private chats
+        self.app.add_handler(CommandHandler("start", self.start_command, filters=filters.ChatType.PRIVATE))
+        self.app.add_handler(CommandHandler("help", self.help_command, filters=filters.ChatType.PRIVATE))
+        self.app.add_handler(CommandHandler("list", self.list_polymers_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CallbackQueryHandler(self.handle_polymer_selection))
-        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_query))
+        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, self.handle_text_query))
 
         return self.app
 
