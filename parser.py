@@ -34,13 +34,15 @@ class PolymerParser:
         """Simple regex-based parsing for well-formatted messages"""
         results = []
 
-        # Pattern to match polymer name and price/status
-        # Examples: "J150 14.900", "J150 BOR", "🐫 Uz-Kor Gas J 150 14.900"
+        # Pattern to match polymer name and price (only numeric prices, not BOR)
+        # Examples: "J150 14.900", "🐫 Uz-Kor Gas J 150 14.900"
         patterns = [
-            r'([A-Za-z0-9🐫\s\-]+?)\s+(\d+\.?\d*)\s*(?:сумм|$)',  # Name followed by price
-            r'([A-Za-z0-9🐫\s\-]+?)\s+(BOR|bor)(?:\s|🔥|$)',  # Name followed by BOR
-            r'🐫\s*([A-Za-z\s\-]+?)\s+([A-Z]+\s*\d+)\s+(\d+\.?\d*)',  # Camel emoji format
-            r'([A-Z]+\d+)\s*[.\s]+\s*(BOR|bor|\d+\.?\d*)',  # Compact format like "J150 BOR"
+            r'🇺🇿\s*([A-Za-z0-9\s\-]+?)\s+(\d{4,}(?:\.\d+)?)',  # Uzbekistan flag format
+            r'🇮🇷\s*([A-Za-z0-9\s\-]+?)\s+(\d{4,}(?:\.\d+)?)',  # Iran flag format
+            r'🇷🇺\s*([A-Za-z0-9\s\-]+?)\s+(\d{4,}(?:\.\d+)?)',  # Russia flag format
+            r'🐫\s*([A-Za-z\s\-]+?)\s+([A-Z]+\s*\d+)\s+(\d{4,}(?:\.\d+)?)',  # Camel emoji format
+            r'([A-Za-z][A-Za-z0-9\s\-]{2,40}?)\s+(\d{4,}(?:\.\d+)?)\s*(?:сумм|$|\n)',  # Generic name + price
+            r'([A-Z][a-z]+\s+[A-Z0-9]+)\s+(\d{4,}(?:\.\d+)?)',  # "Shurtan 0754" format
         ]
 
         for pattern in patterns:
@@ -49,40 +51,35 @@ class PolymerParser:
                 groups = match.groups()
 
                 if len(groups) >= 2:
-                    # Extract name and price/status
+                    # Extract name and price
                     if len(groups) == 3:
-                        # Format: prefix name code price
+                        # Format: emoji + prefix + code + price
                         name = f"{groups[0].strip()} {groups[1].strip()}"
-                        price_or_status = groups[2].strip()
+                        price_str = groups[2].strip()
                     else:
                         name = groups[0].strip()
-                        price_or_status = groups[1].strip()
+                        price_str = groups[1].strip()
 
                     # Clean up the name
-                    name = name.replace('🐫', '').strip()
+                    name = name.replace('🇺🇿', '').replace('🇮🇷', '').replace('🇷🇺', '').replace('🐫', '').strip()
                     name = ' '.join(name.split())
 
                     # Skip if name is too short or looks like garbage
                     if len(name) < 2 or name.isdigit():
                         continue
 
-                    # Determine if it's a price or status
-                    if price_or_status.upper() == 'BOR':
-                        results.append({
-                            'polymer_name': name,
-                            'price': None,
-                            'status': 'AVAILABLE'
-                        })
-                    else:
-                        try:
-                            price = float(price_or_status.replace(',', '.'))
+                    # Only accept numeric prices (4+ digits for valid prices like 14500, 15.800, etc.)
+                    try:
+                        price = float(price_str.replace(',', '.'))
+                        # Only store if price is realistic (> 1000)
+                        if price > 1000:
                             results.append({
                                 'polymer_name': name,
                                 'price': price,
-                                'status': 'AVAILABLE'
+                                'status': 'PRICED'
                             })
-                        except ValueError:
-                            continue
+                    except ValueError:
+                        continue
 
         # Remove duplicates while preserving order
         seen = set()
@@ -99,33 +96,34 @@ class PolymerParser:
         """Use OpenAI to parse complex messages"""
         try:
             prompt = f"""
-You are a data extraction expert. Extract polymer names and their prices from the following message.
+You are a data extraction expert. Extract polymer names and their NUMERIC prices from the following message.
 The message is from a Telegram group where traders post polymer prices.
 
-Rules:
-1. Extract each polymer name and its associated price or status
-2. If a polymer shows "BOR" or "bor", it means "AVAILABLE" (no specific price)
-3. Prices can be in format: 14.900, 14900, 14,900
-4. Common polymer codes: J150, J160, J350, FR170, Y130, 0120, 0220, BL3, PE100, etc.
-5. Ignore phone numbers, dates, and contact information
-6. Return ONLY valid JSON array format
+CRITICAL RULES:
+1. ONLY extract polymers that have actual numeric prices (like 14900, 15.800, 16700)
+2. IGNORE polymers with "BOR", "AVAILABLE", or no price
+3. IGNORE polymers with empty prices or status-only entries
+4. Prices can be in format: 14.900, 14900, 14,900
+5. Common polymer codes: J150, J160, J350, FR170, Y130, 0120, 0220, BL3, PE100, Shurtan, Uz-Kor Gas, etc.
+6. Ignore phone numbers, dates, and contact information
+7. Return ONLY valid JSON array format
 
 Message:
 {message_text}
 
-Return a JSON array of objects with this format:
+Return a JSON array of objects with this format (ONLY include entries with numeric prices):
 [
-  {{"polymer_name": "J150", "price": 14900, "status": "AVAILABLE"}},
-  {{"polymer_name": "Y130", "price": null, "status": "AVAILABLE"}}
+  {{"polymer_name": "Uz-Kor Gas J150", "price": 14900}},
+  {{"polymer_name": "Shurtan By456", "price": 15400}}
 ]
 
-If no polymers found, return an empty array: []
+If no polymers with prices found, return an empty array: []
 """
 
             response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "You are a data extraction expert. Return only valid JSON."},
+                    {"role": "system", "content": "You are a data extraction expert. Extract ONLY polymers with numeric prices. Return only valid JSON."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.1,
@@ -141,15 +139,21 @@ If no polymers found, return an empty array: []
 
             parsed_data = json.loads(result_text)
 
-            # Validate and clean the data
+            # Validate and clean the data - ONLY include items with numeric prices
             validated_results = []
             for item in parsed_data:
-                if 'polymer_name' in item and item['polymer_name']:
-                    validated_results.append({
-                        'polymer_name': item.get('polymer_name', '').strip(),
-                        'price': item.get('price'),
-                        'status': item.get('status', 'AVAILABLE')
-                    })
+                if 'polymer_name' in item and item['polymer_name'] and item.get('price'):
+                    try:
+                        price = float(item.get('price'))
+                        # Only include if price is realistic (> 1000)
+                        if price > 1000:
+                            validated_results.append({
+                                'polymer_name': item.get('polymer_name', '').strip(),
+                                'price': price,
+                                'status': 'PRICED'
+                            })
+                    except (ValueError, TypeError):
+                        continue
 
             return validated_results
 

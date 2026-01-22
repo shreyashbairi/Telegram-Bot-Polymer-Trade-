@@ -41,6 +41,20 @@ class PolymerScraper:
                 chat_id_int = int(chat_id)
                 print(f"Scraping chat: {chat_id_int}")
 
+                # Get the chat entity to extract username for message links
+                chat_entity = await self.client.get_entity(chat_id_int)
+
+                # Determine the username/link base
+                if hasattr(chat_entity, 'username') and chat_entity.username:
+                    link_base = f"https://t.me/{chat_entity.username}"
+                else:
+                    # For private groups/channels without username, use chat ID
+                    # Format: https://t.me/c/{chat_id_without_-100}/{message_id}
+                    chat_id_str = str(chat_id_int).replace('-100', '')
+                    link_base = f"https://t.me/c/{chat_id_str}"
+
+                print(f"Message link base: {link_base}")
+
                 # Calculate the cutoff date (timezone-aware to match Telegram message dates)
                 cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
 
@@ -73,15 +87,18 @@ class PolymerScraper:
                         polymers = self.parser.parse_message(message.text)
 
                         if polymers:
+                            # Construct message link
+                            message_link = f"{link_base}/{message.id}"
+
                             # Store each polymer price in the database
                             for polymer_data in polymers:
                                 success = self.db.insert_price(
                                     polymer_name=polymer_data['polymer_name'],
                                     price=polymer_data.get('price'),
-                                    status=polymer_data.get('status', 'AVAILABLE'),
+                                    status=polymer_data.get('status', 'PRICED'),
                                     date=message.date,
                                     message_text=message.text[:500],  # Store first 500 chars
-                                    message_id=message.id
+                                    message_link=message_link
                                 )
 
                                 if success:
@@ -120,14 +137,23 @@ class PolymerScraper:
                 polymers = self.parser.parse_message(event.message.text)
 
                 if polymers:
+                    # Get chat entity to construct message link
+                    chat = await event.get_chat()
+                    if hasattr(chat, 'username') and chat.username:
+                        message_link = f"https://t.me/{chat.username}/{event.message.id}"
+                    else:
+                        # For private groups/channels
+                        chat_id_str = str(event.chat_id).replace('-100', '')
+                        message_link = f"https://t.me/c/{chat_id_str}/{event.message.id}"
+
                     for polymer_data in polymers:
                         self.db.insert_price(
                             polymer_name=polymer_data['polymer_name'],
                             price=polymer_data.get('price'),
-                            status=polymer_data.get('status', 'AVAILABLE'),
+                            status=polymer_data.get('status', 'PRICED'),
                             date=event.message.date,
                             message_text=event.message.text[:500],
-                            message_id=event.message.id
+                            message_link=message_link
                         )
                     print(f"Processed {len(polymers)} new polymer entries")
 
