@@ -170,7 +170,7 @@ If no polymers with explicit prices found, return an empty array: []
 
             # Use GPT-4 for better accuracy
             response = self.client.chat.completions.create(
-                model="gpt-4",
+                model="o3-mini",
                 messages=[
                     {"role": "system", "content": "You are a data extraction expert. Extract ONLY polymers with explicit numeric prices >= 10000. Numbers that are part of polymer names are NOT prices. Return only valid JSON."},
                     {"role": "user", "content": prompt}
