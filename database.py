@@ -27,9 +27,9 @@ class PolymerDatabase:
                 status TEXT,
                 date DATE NOT NULL,
                 message_text TEXT,
-                message_id INTEGER,
+                message_link TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(normalized_name, date, message_id)
+                UNIQUE(normalized_name, date, message_link)
             )
         ''')
 
@@ -59,7 +59,7 @@ class PolymerDatabase:
 
     def insert_price(self, polymer_name: str, price: Optional[float],
                     status: str, date: datetime, message_text: str,
-                    message_id: int) -> bool:
+                    message_link: str) -> bool:
         """Insert a polymer price record"""
         try:
             conn = sqlite3.connect(self.db_path)
@@ -69,10 +69,10 @@ class PolymerDatabase:
 
             cursor.execute('''
                 INSERT OR REPLACE INTO polymer_prices
-                (polymer_name, normalized_name, price, status, date, message_text, message_id)
+                (polymer_name, normalized_name, price, status, date, message_text, message_link)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (polymer_name, normalized_name, price, status, date.date(),
-                  message_text, message_id))
+                  message_text, message_link))
 
             conn.commit()
             conn.close()
