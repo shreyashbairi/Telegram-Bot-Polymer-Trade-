@@ -31,55 +31,88 @@ class PolymerParser:
         return self._openai_parse(message_text)
 
     def _simple_parse(self, message_text: str) -> List[Dict]:
-        """Simple regex-based parsing for well-formatted messages"""
+        """Simple regex-based parsing for well-formatted messages with STRICT validation"""
         results = []
 
-        # Pattern to match polymer name and price (only numeric prices, not BOR)
-        # Examples: "J150 14.900", "🐫 Uz-Kor Gas J 150 14.900"
+        # STRICT patterns to match polymer name and price
+        # Key requirements:
+        # 1. Price must be 5+ digits (10000+) to avoid matching polymer codes
+        # 2. Clear separation between name and price (multiple spaces, tabs, or newlines)
+        # 3. Price should NOT be part of the polymer name
+
         patterns = [
-            r'🇺🇿\s*([A-Za-z0-9\s\-]+?)\s+(\d{4,}(?:\.\d+)?)',  # Uzbekistan flag format
-            r'🇮🇷\s*([A-Za-z0-9\s\-]+?)\s+(\d{4,}(?:\.\d+)?)',  # Iran flag format
-            r'🇷🇺\s*([A-Za-z0-9\s\-]+?)\s+(\d{4,}(?:\.\d+)?)',  # Russia flag format
-            r'🐫\s*([A-Za-z\s\-]+?)\s+([A-Z]+\s*\d+)\s+(\d{4,}(?:\.\d+)?)',  # Camel emoji format
-            r'([A-Za-z][A-Za-z0-9\s\-]{2,40}?)\s+(\d{4,}(?:\.\d+)?)\s*(?:сумм|$|\n)',  # Generic name + price
-            r'([A-Z][a-z]+\s+[A-Z0-9]+)\s+(\d{4,}(?:\.\d+)?)',  # "Shurtan 0754" format
+            # Multiple spaces between name and price (most common in formatted messages)
+            # Example: "Shurtan By456                15400"
+            r'([A-Za-z][A-Za-z\s\-]+[A-Za-z0-9]+)\s{2,}(\d{5}(?:[.,]\d+)?)',
+
+            # Tab or newline separated
+            r'([A-Za-z][A-Za-z\s\-]+[A-Za-z0-9]+)[\t\n]+(\d{5}(?:[.,]\d+)?)',
+
+            # With country flags
+            r'🇺🇿\s*([A-Za-z][A-Za-z\s\-]+[A-Za-z0-9]+)\s+(\d{5}(?:[.,]\d+)?)',
+            r'🇮🇷\s*([A-Za-z][A-Za-z\s\-]+[A-Za-z0-9]+)\s+(\d{5}(?:[.,]\d+)?)',
+            r'🇷🇺\s*([A-Za-z][A-Za-z\s\-]+[A-Za-z0-9]+)\s+(\d{5}(?:[.,]\d+)?)',
+
+            # With explicit price indicators
+            r'([A-Za-z][A-Za-z\s\-]+[A-Za-z0-9]+)\s+(\d{5}(?:[.,]\d+)?)\s*(?:сумм|sum)',
         ]
 
         for pattern in patterns:
-            matches = re.finditer(pattern, message_text, re.MULTILINE | re.IGNORECASE)
+            matches = re.finditer(pattern, message_text, re.MULTILINE)
             for match in matches:
-                groups = match.groups()
+                try:
+                    groups = match.groups()
+                    if len(groups) < 2:
+                        continue
 
-                if len(groups) >= 2:
-                    # Extract name and price
-                    if len(groups) == 3:
-                        # Format: emoji + prefix + code + price
-                        name = f"{groups[0].strip()} {groups[1].strip()}"
-                        price_str = groups[2].strip()
-                    else:
-                        name = groups[0].strip()
-                        price_str = groups[1].strip()
+                    name = groups[0].strip()
+                    price_str = groups[1].strip()
 
-                    # Clean up the name
+                    # Clean up the name - remove flags and extra spaces
                     name = name.replace('🇺🇿', '').replace('🇮🇷', '').replace('🇷🇺', '').replace('🐫', '').strip()
                     name = ' '.join(name.split())
 
-                    # Skip if name is too short or looks like garbage
-                    if len(name) < 2 or name.isdigit():
+                    # Validation: ensure name is reasonable
+                    if len(name) < 3 or name.isdigit():
                         continue
 
-                    # Only accept numeric prices (4+ digits for valid prices like 14500, 15.800, etc.)
-                    try:
-                        price = float(price_str.replace(',', '.'))
-                        # Only store if price is realistic (> 1000)
-                        if price > 1000:
-                            results.append({
-                                'polymer_name': name,
-                                'price': price,
-                                'status': 'PRICED'
-                            })
-                    except ValueError:
-                        continue
+                    # CRITICAL CHECK: Ensure the price is NOT part of the polymer name
+                    # This prevents "Uz-Kor Gas Jm370" from being parsed as price 370
+                    # or "BL5200" from being parsed as price 5200
+
+                    name_parts = name.split()
+                    last_part = name_parts[-1] if name_parts else ""
+
+                    # If the last part of the name contains digits, check for false matches
+                    if last_part and any(char.isdigit() for char in last_part):
+                        # Extract all digits from the last part of the name
+                        digits_in_name = ''.join(c for c in last_part if c.isdigit())
+
+                        # If the price matches the digits in the name, it's a false match - skip it
+                        # Examples that will be rejected:
+                        # - "Jm370" with price "370" or "3700"
+                        # - "BL5200" with price "5200"
+                        # - "1561" with price "1561"
+                        if digits_in_name == price_str or price_str.startswith(digits_in_name):
+                            continue
+                        if price_str == digits_in_name or digits_in_name.startswith(price_str):
+                            continue
+
+                    # Parse and validate price
+                    price = float(price_str.replace(',', '.'))
+
+                    # STRICT: Only accept realistic polymer prices >= 10000
+                    # Polymer prices typically range from 14000 to 20000
+                    # This prevents matching small numbers that are polymer codes
+                    if price >= 10000:
+                        results.append({
+                            'polymer_name': name,
+                            'price': price,
+                            'status': 'PRICED'
+                        })
+
+                except (ValueError, IndexError):
+                    continue
 
         # Remove duplicates while preserving order
         seen = set()
@@ -93,40 +126,56 @@ class PolymerParser:
         return unique_results
 
     def _openai_parse(self, message_text: str) -> List[Dict]:
-        """Use OpenAI to parse complex messages"""
+        """Use OpenAI GPT-4 to parse complex messages with strict validation"""
         try:
             prompt = f"""
 You are a data extraction expert. Extract polymer names and their NUMERIC prices from the following message.
 The message is from a Telegram group where traders post polymer prices.
 
-CRITICAL RULES:
-1. ONLY extract polymers that have actual numeric prices (like 14900, 15.800, 16700)
-2. IGNORE polymers with "BOR", "AVAILABLE", or no price
-3. IGNORE polymers with empty prices or status-only entries
-4. Prices can be in format: 14.900, 14900, 14,900
-5. Common polymer codes: J150, J160, J350, FR170, Y130, 0120, 0220, BL3, PE100, Shurtan, Uz-Kor Gas, etc.
-6. Ignore phone numbers, dates, and contact information
-7. Return ONLY valid JSON array format
+CRITICAL RULES - FOLLOW THESE EXACTLY:
+1. ONLY extract polymers that have EXPLICIT numeric prices shown in the message
+2. IGNORE polymers with "BOR", "AVAILABLE", "🔥", or any status symbols
+3. IGNORE polymers where no price is shown
+4. Prices are typically 5-digit numbers: 14000-20000 range (e.g., 14900, 15800, 16700)
+5. DO NOT extract the number from the polymer name as the price
+   - Example: "Uz-Kor Gas Jm370" does NOT have a price (370 is part of the name)
+   - Example: "BL5200" does NOT have a price (5200 is part of the name)
+   - Example: "Shurtan 1561" does NOT have a price (1561 is part of the name)
+6. Common polymer names include numbers: J150, J370, BL5200, 1561, etc. - these are NOT prices
+7. Ignore phone numbers (starting with +998, etc.), dates, and contact information
+8. Return ONLY valid JSON array format
+
+Examples of VALID entries (polymer WITH explicit price):
+- "Uz-Kor Gas J150              14900" → VALID (price 14900 is separate)
+- "Shurtan By456                15400" → VALID (price 15400 is separate)
+- "🇺🇿 Uz-Kor Gas Jm370       17600" → VALID (price 17600 is separate)
+
+Examples of INVALID entries (NO price or price is part of name):
+- "Uz-Kor Gas J150🔥🔥" → INVALID (no price, only status symbol)
+- "Uz-Kor Gas Jm370" → INVALID (370 is part of name, not a price)
+- "BL5200 UzKorGas" → INVALID (5200 is part of name, not a price)
+- "Shurtan 1561" → INVALID (1561 is part of name, not a price)
 
 Message:
 {message_text}
 
-Return a JSON array of objects with this format (ONLY include entries with numeric prices):
+Return a JSON array with ONLY entries that have explicit numeric prices >= 10000:
 [
   {{"polymer_name": "Uz-Kor Gas J150", "price": 14900}},
   {{"polymer_name": "Shurtan By456", "price": 15400}}
 ]
 
-If no polymers with prices found, return an empty array: []
+If no polymers with explicit prices found, return an empty array: []
 """
 
+            # Use GPT-4 for better accuracy
             response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are a data extraction expert. Extract ONLY polymers with numeric prices. Return only valid JSON."},
+                    {"role": "system", "content": "You are a data extraction expert. Extract ONLY polymers with explicit numeric prices >= 10000. Numbers that are part of polymer names are NOT prices. Return only valid JSON."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.1,
+                temperature=0.0,  # Use 0 for deterministic results
                 max_tokens=2000
             )
 
@@ -139,16 +188,32 @@ If no polymers with prices found, return an empty array: []
 
             parsed_data = json.loads(result_text)
 
-            # Validate and clean the data - ONLY include items with numeric prices
+            # Validate and clean the data - ONLY include items with realistic prices
             validated_results = []
             for item in parsed_data:
                 if 'polymer_name' in item and item['polymer_name'] and item.get('price'):
                     try:
                         price = float(item.get('price'))
-                        # Only include if price is realistic (> 1000)
-                        if price > 1000:
+
+                        # Strict validation: price must be >= 10000
+                        if price >= 10000:
+                            polymer_name = item.get('polymer_name', '').strip()
+
+                            # Double-check: ensure price is not derived from polymer name
+                            name_parts = polymer_name.split()
+                            last_part = name_parts[-1] if name_parts else ""
+
+                            # Extract digits from last part of name
+                            if last_part and any(c.isdigit() for c in last_part):
+                                digits_in_name = ''.join(c for c in last_part if c.isdigit())
+                                price_str = str(int(price))
+
+                                # Skip if price matches digits in name
+                                if digits_in_name == price_str or price_str.startswith(digits_in_name) or digits_in_name.startswith(price_str):
+                                    continue
+
                             validated_results.append({
-                                'polymer_name': item.get('polymer_name', '').strip(),
+                                'polymer_name': polymer_name,
                                 'price': price,
                                 'status': 'PRICED'
                             })
