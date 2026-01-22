@@ -2,7 +2,7 @@
 Message scraper using Telethon to fetch historical messages from Telegram group
 """
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from telethon import TelegramClient, events
 from telethon.tl.types import Message
 import config
@@ -41,8 +41,8 @@ class PolymerScraper:
                 chat_id_int = int(chat_id)
                 print(f"Scraping chat: {chat_id_int}")
 
-                # Calculate the cutoff date
-                cutoff_date = datetime.now() - timedelta(days=days)
+                # Calculate the cutoff date (timezone-aware to match Telegram message dates)
+                cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
 
                 # Fetch messages
                 message_count = 0
