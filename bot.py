@@ -29,6 +29,7 @@ class PolymerPriceBot:
         self.app.add_handler(CommandHandler("start", self.start_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CommandHandler("help", self.help_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CommandHandler("list", self.list_polymers_command, filters=filters.ChatType.PRIVATE))
+        self.app.add_handler(CommandHandler("search", self.search_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CallbackQueryHandler(self.handle_polymer_selection))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, self.handle_text_query))
 
@@ -42,10 +43,11 @@ Welcome to the Polymer Price Bot! 🏭
 I can help you check historical prices for various polymers.
 
 Commands:
-/list - Show list of available polymers
-/help - Show this help message
+/list - Browse all available polymers
+/search <name> - Search for specific polymers
+/help - Show detailed help
 
-You can also just type the polymer name (e.g., "J150", "Y130") to get its price history.
+You can also just type the polymer name (e.g., "J150", "Y130") to get its 7-day price history with message links.
 """
         await update.message.reply_text(welcome_message)
 
@@ -59,18 +61,24 @@ Polymer Price Bot Help 📊
 
 How to use:
 1. Use /list to see all available polymers
-2. Click on a polymer name or type it directly
-3. Get price history: yesterday, 3 days ago, 1 week ago
+2. Use /search <name> to search for specific polymers
+3. Click on a polymer name or type it directly
+4. Get price history for the last 7 days
+
+Commands:
+/start - Start the bot and show menu
+/list - Browse all polymers
+/search <name> - Search for polymers (e.g., /search J150)
+/help - Show this help message
 
 Examples:
 - Type "J150" to get J150 price history
-- Type "Y130" to get Y130 price history
+- Use /search shurtan to find all Shurtan polymers
 - Use /list to browse all available polymers
 
 The bot shows:
-✅ Price yesterday
-✅ Price 3 days ago
-✅ Price 1 week ago
+✅ Daily prices for the last 7 days
+✅ Message links for each price entry
 ✅ Latest available price if historical data is missing
 """
         await update.message.reply_text(help_message)
@@ -78,6 +86,40 @@ The bot shows:
     async def list_polymers_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /list command"""
         await self.show_polymer_menu(update, context)
+
+    async def search_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /search command"""
+        if not context.args:
+            await update.message.reply_text(
+                "Please provide a search query.\n\n"
+                "Usage: /search <polymer_name>\n"
+                "Example: /search J150"
+            )
+            return
+
+        search_query = " ".join(context.args)
+        results = self.db.search_polymers(search_query)
+
+        if not results:
+            await update.message.reply_text(
+                f"No polymers found matching '{search_query}'.\n\n"
+                "Try a different search term or use /list to see all polymers."
+            )
+            return
+
+        # Build keyboard with search results
+        keyboard = []
+        for polymer in results:
+            button_text = f"{polymer['display_name']}"
+            keyboard.append([InlineKeyboardButton(
+                button_text,
+                callback_data=f"polymer:{polymer['normalized_name']}"
+            )])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        message_text = f"🔍 Search results for '{search_query}' ({len(results)} found):"
+
+        await update.message.reply_text(message_text, reply_markup=reply_markup)
 
     async def show_polymer_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
         """Show paginated menu of available polymers"""
@@ -158,68 +200,60 @@ The bot shows:
         await self.send_polymer_price_history(update, polymer_name)
 
     async def send_polymer_price_history(self, update_or_query, polymer_name: str):
-        """Send price history for a polymer"""
+        """Send price history for a polymer (last 7 days)"""
         today = datetime.now()
 
-        # Get prices for specific dates
-        yesterday = today - timedelta(days=1)
-        three_days_ago = today - timedelta(days=3)
-        one_week_ago = today - timedelta(days=7)
-
-        price_yesterday = self.db.get_price_on_date(polymer_name, yesterday)
-        price_3days = self.db.get_price_on_date(polymer_name, three_days_ago)
-        price_1week = self.db.get_price_on_date(polymer_name, one_week_ago)
-
-        # Get latest price as fallback
+        # Get latest price to display polymer name
         latest_price = self.db.get_latest_price(polymer_name)
 
-        # Build response message
         if not latest_price:
             message = f"❌ No data available for '{polymer_name}'"
-        else:
-            message = f"📊 Price History for {latest_price['polymer_name']}\n"
-            message += "=" * 40 + "\n\n"
-
-            # Yesterday's price
-            if price_yesterday:
-                price_str = f"{price_yesterday['price']:.2f}" if price_yesterday['price'] else price_yesterday['status']
-                message += f"📅 Yesterday ({yesterday.strftime('%Y-%m-%d')}):\n"
-                message += f"   💰 {price_str}\n\n"
+            # Send the message
+            if isinstance(update_or_query, Update):
+                await update_or_query.message.reply_text(message)
             else:
-                message += f"📅 Yesterday: No data\n\n"
+                await update_or_query.message.reply_text(message)
+            return
 
-            # 3 days ago
-            if price_3days:
-                price_str = f"{price_3days['price']:.2f}" if price_3days['price'] else price_3days['status']
-                message += f"📅 3 days ago ({three_days_ago.strftime('%Y-%m-%d')}):\n"
-                message += f"   💰 {price_str}\n\n"
+        # Build header
+        message = f"📊 Price History for {latest_price['polymer_name']}\n"
+        message += "=" * 40 + "\n\n"
+
+        # Get prices for last 7 days
+        has_data = False
+        for day in range(1, 8):
+            target_date = today - timedelta(days=day)
+            price_data = self.db.get_price_on_date(polymer_name, target_date)
+
+            if price_data:
+                has_data = True
+                price_str = f"{price_data['price']:.2f}" if price_data['price'] else price_data['status']
+                message += f"📅 Day {day} ({target_date.strftime('%Y-%m-%d')}):\n"
+                message += f"   💰 {price_str}\n"
+                if price_data.get('message_link'):
+                    message += f"   🔗 {price_data['message_link']}\n"
+                message += "\n"
             else:
-                message += f"📅 3 days ago: No data\n\n"
+                message += f"📅 Day {day} ({target_date.strftime('%Y-%m-%d')}): No data\n\n"
 
-            # 1 week ago
-            if price_1week:
-                price_str = f"{price_1week['price']:.2f}" if price_1week['price'] else price_1week['status']
-                message += f"📅 1 week ago ({one_week_ago.strftime('%Y-%m-%d')}):\n"
-                message += f"   💰 {price_str}\n\n"
-            else:
-                message += f"📅 1 week ago: No data\n\n"
+        # Latest price section
+        message += "=" * 40 + "\n"
+        latest_price_str = f"{latest_price['price']:.2f}" if latest_price['price'] else latest_price['status']
+        message += f"🔄 Latest Price ({latest_price['date']}):\n"
+        message += f"   💰 {latest_price_str}\n"
+        if latest_price.get('message_link'):
+            message += f"   🔗 {latest_price['message_link']}\n"
 
-            # Latest price
-            message += "=" * 40 + "\n"
-            latest_price_str = f"{latest_price['price']:.2f}" if latest_price['price'] else latest_price['status']
-            message += f"🔄 Latest Price ({latest_price['date']}):\n"
-            message += f"   💰 {latest_price_str}\n"
-
-            # Check if no historical data but have latest
-            if not price_yesterday and not price_3days and not price_1week:
-                message += "\n⚠️ Historical data not available. Showing latest data only."
+        # Warning if no historical data
+        if not has_data:
+            message += "\n⚠️ No historical data for the last 7 days. Showing latest data only."
 
         # Send the message
         if isinstance(update_or_query, Update):
-            await update_or_query.message.reply_text(message)
+            await update_or_query.message.reply_text(message, disable_web_page_preview=True)
         else:
             # It's a callback query
-            await update_or_query.message.reply_text(message)
+            await update_or_query.message.reply_text(message, disable_web_page_preview=True)
 
     async def run(self):
         """Run the bot"""
