@@ -91,7 +91,7 @@ class PolymerDatabase:
         start_date = end_date - timedelta(days=days)
 
         cursor.execute('''
-            SELECT polymer_name, price, status, date, message_text
+            SELECT polymer_name, price, status, date, message_text, message_link
             FROM polymer_prices
             WHERE normalized_name = ?
             AND date BETWEEN ? AND ?
@@ -105,7 +105,8 @@ class PolymerDatabase:
                 'price': row[1],
                 'status': row[2],
                 'date': row[3],
-                'message_text': row[4]
+                'message_text': row[4],
+                'message_link': row[5]
             })
 
         conn.close()
@@ -119,7 +120,7 @@ class PolymerDatabase:
         normalized_name = self.normalize_polymer_name(polymer_name)
 
         cursor.execute('''
-            SELECT polymer_name, price, status, date, message_text
+            SELECT polymer_name, price, status, date, message_text, message_link
             FROM polymer_prices
             WHERE normalized_name = ?
             AND date = ?
@@ -136,7 +137,8 @@ class PolymerDatabase:
                 'price': row[1],
                 'status': row[2],
                 'date': row[3],
-                'message_text': row[4]
+                'message_text': row[4],
+                'message_link': row[5]
             }
         return None
 
@@ -148,7 +150,7 @@ class PolymerDatabase:
         normalized_name = self.normalize_polymer_name(polymer_name)
 
         cursor.execute('''
-            SELECT polymer_name, price, status, date, message_text
+            SELECT polymer_name, price, status, date, message_text, message_link
             FROM polymer_prices
             WHERE normalized_name = ?
             ORDER BY date DESC, created_at DESC
@@ -164,7 +166,8 @@ class PolymerDatabase:
                 'price': row[1],
                 'status': row[2],
                 'date': row[3],
-                'message_text': row[4]
+                'message_text': row[4],
+                'message_link': row[5]
             }
         return None
 
@@ -194,6 +197,34 @@ class PolymerDatabase:
             GROUP BY normalized_name
             ORDER BY polymer_name
         ''')
+
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                'normalized_name': row[0],
+                'display_name': row[1],
+                'latest_date': row[2]
+            })
+
+        conn.close()
+        return results
+
+    def search_polymers(self, search_query: str) -> List[Dict]:
+        """Search for polymers by name (case-insensitive)"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Search in both polymer_name and normalized_name
+        search_pattern = f"%{search_query.lower()}%"
+
+        cursor.execute('''
+            SELECT DISTINCT normalized_name, polymer_name, MAX(date) as latest_date
+            FROM polymer_prices
+            WHERE LOWER(polymer_name) LIKE ? OR LOWER(normalized_name) LIKE ?
+            GROUP BY normalized_name
+            ORDER BY polymer_name
+            LIMIT 20
+        ''', (search_pattern, search_pattern))
 
         results = []
         for row in cursor.fetchall():
