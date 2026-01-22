@@ -3,6 +3,7 @@ Message parser using OpenAI to extract polymer prices from unstructured text
 """
 import json
 import re
+import time
 from typing import List, Dict
 from openai import OpenAI
 import config
@@ -126,9 +127,13 @@ class PolymerParser:
         return unique_results
 
     def _openai_parse(self, message_text: str) -> List[Dict]:
-        """Use OpenAI GPT-4 to parse complex messages with strict validation"""
-        try:
-            prompt = f"""
+        """Use OpenAI GPT-4o-mini to parse complex messages with strict validation and retry logic"""
+        max_retries = 3
+        retry_delay = 2  # Start with 2 seconds
+
+        for attempt in range(max_retries):
+            try:
+                prompt = f"""
 You are a data extraction expert. Extract polymer names and their NUMERIC prices from the following message.
 The message is from a Telegram group where traders post polymer prices.
 
@@ -168,64 +173,99 @@ Return a JSON array with ONLY entries that have explicit numeric prices >= 10000
 If no polymers with explicit prices found, return an empty array: []
 """
 
-            # Use GPT-4 for better accuracy
-            response = self.client.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are a data extraction expert. Extract ONLY polymers with explicit numeric prices >= 10000. Numbers that are part of polymer names are NOT prices. Return only valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.0,  # Use 0 for deterministic results
-                max_tokens=2000
-            )
+                # Use GPT-4o-mini: Much cheaper (~60x) and faster than GPT-4, still accurate
+                # Pricing: $0.150 per 1M input tokens vs $10 per 1M for GPT-4
+                response = self.client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are a data extraction expert. Extract ONLY polymers with explicit numeric prices >= 10000. Numbers that are part of polymer names are NOT prices. Return only valid JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.0,  # Use 0 for deterministic results
+                    max_tokens=1500  # Reduced token limit to save costs
+                )
 
-            result_text = response.choices[0].message.content.strip()
+                result_text = response.choices[0].message.content.strip()
 
-            # Extract JSON from response (in case there's extra text)
-            json_match = re.search(r'\[.*\]', result_text, re.DOTALL)
-            if json_match:
-                result_text = json_match.group(0)
+                # Validate that we got a response
+                if not result_text:
+                    print("OpenAI returned empty response")
+                    return []
 
-            parsed_data = json.loads(result_text)
+                # Extract JSON from response (in case there's extra text)
+                json_match = re.search(r'\[.*\]', result_text, re.DOTALL)
+                if json_match:
+                    result_text = json_match.group(0)
+                else:
+                    # No JSON array found, check if it's just an empty response
+                    if 'no polymers' in result_text.lower() or 'empty array' in result_text.lower():
+                        return []
+                    print(f"No JSON array found in OpenAI response: {result_text[:200]}")
+                    return []
 
-            # Validate and clean the data - ONLY include items with realistic prices
-            validated_results = []
-            for item in parsed_data:
-                if 'polymer_name' in item and item['polymer_name'] and item.get('price'):
-                    try:
-                        price = float(item.get('price'))
+                # Parse JSON
+                try:
+                    parsed_data = json.loads(result_text)
+                except json.JSONDecodeError as je:
+                    print(f"JSON decode error: {je}")
+                    print(f"Response text: {result_text[:500]}")
+                    return []
 
-                        # Strict validation: price must be >= 10000
-                        if price >= 10000:
-                            polymer_name = item.get('polymer_name', '').strip()
+                # Validate and clean the data - ONLY include items with realistic prices
+                validated_results = []
+                for item in parsed_data:
+                    if 'polymer_name' in item and item['polymer_name'] and item.get('price'):
+                        try:
+                            price = float(item.get('price'))
 
-                            # Double-check: ensure price is not derived from polymer name
-                            name_parts = polymer_name.split()
-                            last_part = name_parts[-1] if name_parts else ""
+                            # Strict validation: price must be >= 10000
+                            if price >= 10000:
+                                polymer_name = item.get('polymer_name', '').strip()
 
-                            # Extract digits from last part of name
-                            if last_part and any(c.isdigit() for c in last_part):
-                                digits_in_name = ''.join(c for c in last_part if c.isdigit())
-                                price_str = str(int(price))
+                                # Double-check: ensure price is not derived from polymer name
+                                name_parts = polymer_name.split()
+                                last_part = name_parts[-1] if name_parts else ""
 
-                                # Skip if price matches digits in name
-                                if digits_in_name == price_str or price_str.startswith(digits_in_name) or digits_in_name.startswith(price_str):
-                                    continue
+                                # Extract digits from last part of name
+                                if last_part and any(c.isdigit() for c in last_part):
+                                    digits_in_name = ''.join(c for c in last_part if c.isdigit())
+                                    price_str = str(int(price))
 
-                            validated_results.append({
-                                'polymer_name': polymer_name,
-                                'price': price,
-                                'status': 'PRICED'
-                            })
-                    except (ValueError, TypeError):
+                                    # Skip if price matches digits in name
+                                    if digits_in_name == price_str or price_str.startswith(digits_in_name) or digits_in_name.startswith(price_str):
+                                        continue
+
+                                validated_results.append({
+                                    'polymer_name': polymer_name,
+                                    'price': price,
+                                    'status': 'PRICED'
+                                })
+                        except (ValueError, TypeError):
+                            continue
+
+                return validated_results
+
+            except Exception as e:
+                error_msg = str(e)
+
+                # Check if it's a rate limit error
+                if '429' in error_msg or 'rate_limit' in error_msg.lower():
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                        print(f"Rate limit hit, waiting {wait_time} seconds before retry {attempt + 1}/{max_retries}...")
+                        time.sleep(wait_time)
                         continue
+                    else:
+                        print(f"Rate limit exceeded after {max_retries} retries: {e}")
+                        return []
+                else:
+                    # Other errors, don't retry
+                    print(f"Error parsing with OpenAI: {e}")
+                    return []
 
-            return validated_results
-
-        except Exception as e:
-            print(f"Error parsing with OpenAI: {e}")
-            # Fall back to simple parsing
-            return []
+        # If we exhausted all retries
+        print("Max retries exceeded for OpenAI parsing")
+        return []
 
     def extract_date_from_message(self, message_text: str) -> str:
         """Extract date from message if present"""
