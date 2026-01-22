@@ -41,21 +41,21 @@ class PolymerScraper:
                 chat_id_int = int(chat_id)
                 print(f"Scraping chat: {chat_id_int}")
 
-                # Calculate the date range
-                end_date = datetime.now()
-                start_date = end_date - timedelta(days=days)
+                # Calculate the cutoff date
+                cutoff_date = datetime.now() - timedelta(days=days)
 
                 # Fetch messages
                 message_count = 0
                 processed_count = 0
+                total_scanned = 0
 
-                async for message in self.client.iter_messages(
-                    chat_id_int,
-                    offset_date=end_date,
-                    reverse=True
-                ):
-                    # Stop if we've gone past our date range
-                    if message.date < start_date:
+                # Iterate through messages from most recent
+                async for message in self.client.iter_messages(chat_id_int, limit=None):
+                    total_scanned += 1
+
+                    # Stop if message is older than our cutoff date
+                    if message.date < cutoff_date:
+                        print(f"Reached messages older than {days} days, stopping...")
                         break
 
                     # Only process text messages
@@ -87,19 +87,22 @@ class PolymerScraper:
                                 if success:
                                     processed_count += 1
 
-                            if processed_count % 50 == 0:
-                                print(f"Processed {processed_count} polymer entries from {message_count} messages...")
+                            if message_count % 10 == 0:
+                                print(f"Scanned {total_scanned} messages, processed {message_count} text messages, found {processed_count} polymer entries...")
 
                     except Exception as e:
                         print(f"Error processing message {message.id}: {e}")
                         continue
 
                 print(f"Scraping complete for chat {chat_id_int}")
-                print(f"Total messages scanned: {message_count}")
+                print(f"Total messages scanned: {total_scanned}")
+                print(f"Total text messages processed: {message_count}")
                 print(f"Total polymer entries stored: {processed_count}")
 
             except Exception as e:
                 print(f"Error scraping chat {chat_id}: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
 
     async def monitor_new_messages(self):
