@@ -229,7 +229,7 @@ The bot shows:
         await self.start_command(update, context)
 
     async def compare_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /compare command with multiple modes, supporting quoted polymer names"""
+        """Handle /compare command with multiple modes, supporting parentheses for polymer names with spaces"""
         # Handle both message and callback query contexts
         if update.message:
             message_text = update.message.text
@@ -247,16 +247,16 @@ The bot shows:
                 "/compare <polymer> <polymer> - Compare two polymers\n"
                 "/compare <polymer> <date> - Show high/low for date\n"
                 "/compare <polymer> <polymer> <date> - Compare two for date\n\n"
-                "For names with spaces, use quotes:\n"
-                "/compare '2119 Arya'\n"
-                "/compare '2119 Arya' '2119 Iran'\n\n"
+                "For names with spaces, use parentheses:\n"
+                "/compare (2119 Arya)\n"
+                "/compare (2119 Arya) (2119 Iran)\n\n"
                 "Example: /compare J150\n"
                 "Example: /compare J150 Y130\n"
                 "Example: /compare J150 23.01.26"
             )
             return
 
-        # Parse arguments with quote support using the full message text
+        # Parse arguments with parentheses support
         import re
         try:
             # Extract everything after /compare command
@@ -266,32 +266,51 @@ The bot shows:
                 await reply_method("Please provide polymer name(s) to compare.")
                 return
 
-            # Normalize ALL quote-like characters to straight single quotes
-            # This handles Unicode quote variations
-            quote_chars = [
-                '"', '"',  # Smart double quotes U+201C, U+201D
-                "'", "'",  # Smart single quotes U+2018, U+2019
-                '‚', '„',  # Low quotes U+201A, U+201E
-                '«', '»',  # Guillemets U+00AB, U+00BB
-                '‹', '›',  # Single guillemets U+2039, U+203A
-                '′', '″',  # Prime symbols U+2032, U+2033
-                '`', '´',  # Grave and acute accents
-            ]
+            # Parse parenthesized content and regular space-separated arguments
+            # Find all content within parentheses: (polymer name)
+            parenthesized = re.findall(r'\(([^)]+)\)', args_text)
 
-            for char in quote_chars:
-                args_text = args_text.replace(char, "'")
+            # Remove parenthesized content from args_text to get remaining args
+            remaining = re.sub(r'\([^)]+\)', '', args_text).strip()
 
-            # Also normalize straight double quotes to single quotes for consistency
-            args_text = args_text.replace('"', "'")
+            # Split remaining by whitespace
+            regular_args = remaining.split() if remaining else []
 
-            # Now parse with shlex using normalized quotes
-            import shlex
-            parsed_args = shlex.split(args_text)
+            # Combine: first get parenthesized items in order, then regular args
+            # We need to maintain the original order, so let's do it differently
+            parsed_args = []
+            temp_text = args_text
+
+            # Process in order: find positions of parentheses and regular words
+            i = 0
+            while i < len(temp_text):
+                # Skip whitespace
+                while i < len(temp_text) and temp_text[i].isspace():
+                    i += 1
+                if i >= len(temp_text):
+                    break
+
+                # Check if we have a parenthesis
+                if temp_text[i] == '(':
+                    # Find the closing parenthesis
+                    end = temp_text.find(')', i)
+                    if end == -1:
+                        raise ValueError("Unclosed parenthesis")
+                    # Extract content between parentheses
+                    parsed_args.append(temp_text[i+1:end])
+                    i = end + 1
+                else:
+                    # Regular word - extract until space or parenthesis
+                    start = i
+                    while i < len(temp_text) and not temp_text[i].isspace() and temp_text[i] != '(':
+                        i += 1
+                    parsed_args.append(temp_text[start:i])
+
         except ValueError as e:
             reply_method = update.message.reply_text if update.message else update.callback_query.message.reply_text
             await reply_method(
                 f"Error parsing command: {e}\n\n"
-                "Make sure to close all quotes properly."
+                "Make sure to close all parentheses properly."
             )
             return
 
@@ -352,9 +371,9 @@ The bot shows:
                     f"Invalid date format: '{date_str}'. Use DD.MM.YY\n\n"
                     f"Parsed {len(parsed_args)} arguments: {parsed_args}\n\n"
                     "If you're trying to compare polymers with spaces in their names, "
-                    "make sure to use quotes:\n"
-                    "/compare '2119 Iran' '2119 Arya'\n\n"
-                    "Note: Any type of quotes work - they will be normalized automatically"
+                    "make sure to use parentheses:\n"
+                    "/compare (2119 Iran) (2119 Arya)\n\n"
+                    "Example: /compare (2119 Iran) (2119 Arya) 23.01.26"
                 )
                 return
 
