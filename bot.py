@@ -236,13 +236,34 @@ The bot shows:
             else:
                 message += f"📅 Day {day} ({target_date.strftime('%Y-%m-%d')}): No data\n\n"
 
-        # Latest price section
+        # Latest price section with statistics
         message += "=" * 40 + "\n"
-        latest_price_str = f"{latest_price['price']:.2f}" if latest_price['price'] else latest_price['status']
-        message += f"🔄 Latest Price ({latest_price['date']}):\n"
-        message += f"   💰 {latest_price_str}\n"
-        if latest_price.get('message_link'):
-            message += f"   🔗 {latest_price['message_link']}\n"
+        message += f"📈 Latest Day Statistics ({latest_price['date']}):\n\n"
+
+        # Get price statistics for the latest date
+        latest_date_obj = datetime.strptime(str(latest_price['date']), '%Y-%m-%d')
+        price_stats = self.db.get_price_stats_for_date(polymer_name, latest_date_obj)
+
+        if price_stats and price_stats['count'] > 1:
+            # Multiple prices on this day, show statistics
+            message += f"   📉 Lowest Price: {price_stats['lowest']:.2f}\n"
+            if price_stats.get('lowest_link'):
+                message += f"      🔗 {price_stats['lowest_link']}\n"
+
+            message += f"\n   📊 Mean Price: {price_stats['mean']:.2f}\n"
+
+            message += f"\n   📈 Highest Price: {price_stats['highest']:.2f}\n"
+            if price_stats.get('highest_link'):
+                message += f"      🔗 {price_stats['highest_link']}\n"
+
+            message += f"\n   💼 Total Listings: {price_stats['count']}\n"
+
+        else:
+            # Only one price or no stats available
+            latest_price_str = f"{latest_price['price']:.2f}" if latest_price['price'] else latest_price['status']
+            message += f"   💰 Price: {latest_price_str}\n"
+            if latest_price.get('message_link'):
+                message += f"   🔗 {latest_price['message_link']}\n"
 
         # Warning if no historical data
         if not has_data:
