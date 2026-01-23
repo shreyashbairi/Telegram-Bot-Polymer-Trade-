@@ -171,6 +171,57 @@ class PolymerDatabase:
             }
         return None
 
+    def get_price_stats_for_date(self, polymer_name: str, target_date: datetime) -> Optional[Dict]:
+        """Get price statistics (min, max, mean) for a polymer on a specific date"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        normalized_name = self.normalize_polymer_name(polymer_name)
+
+        # Get all prices for this polymer on this date
+        cursor.execute('''
+            SELECT price, message_link
+            FROM polymer_prices
+            WHERE normalized_name = ?
+            AND date = ?
+            AND price IS NOT NULL
+            ORDER BY price ASC
+        ''', (normalized_name, target_date.date()))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            return None
+
+        prices = [row[0] for row in rows]
+
+        # Find lowest and highest with their links
+        lowest_price = min(prices)
+        highest_price = max(prices)
+
+        # Get the message links for lowest and highest
+        lowest_link = None
+        highest_link = None
+
+        for row in rows:
+            if row[0] == lowest_price and not lowest_link:
+                lowest_link = row[1]
+            if row[0] == highest_price:
+                highest_link = row[1]
+
+        # Calculate mean as (highest + lowest) / 2
+        mean_price = (highest_price + lowest_price) / 2
+
+        return {
+            'lowest': lowest_price,
+            'highest': highest_price,
+            'mean': mean_price,
+            'lowest_link': lowest_link,
+            'highest_link': highest_link,
+            'count': len(prices)
+        }
+
     def get_all_polymers(self) -> List[str]:
         """Get list of all unique polymer names"""
         conn = sqlite3.connect(self.db_path)
