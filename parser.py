@@ -16,6 +16,52 @@ class PolymerParser:
             organization=config.OPENAI_ORG_ID
         )
 
+    def _remove_emojis(self, text: str) -> str:
+        """
+        Remove emojis and other non-standard Unicode characters from text
+        Examples:
+        - "0209 🔴 AKPC" -> "0209 AKPC"
+        - "0209 🔴Amir Kabir" -> "0209 Amir Kabir"
+        - "0209 🔵" -> "0209"
+        - "0209 🔴 Iran" -> "0209 Iran"
+        """
+        # Define emoji pattern - matches most common emojis
+        emoji_pattern = re.compile(
+            "["
+            "\U0001F1E0-\U0001F1FF"  # flags (iOS)
+            "\U0001F300-\U0001F5FF"  # symbols & pictographs
+            "\U0001F600-\U0001F64F"  # emoticons
+            "\U0001F680-\U0001F6FF"  # transport & map symbols
+            "\U0001F700-\U0001F77F"  # alchemical symbols
+            "\U0001F780-\U0001F7FF"  # Geometric Shapes Extended
+            "\U0001F800-\U0001F8FF"  # Supplemental Arrows-C
+            "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+            "\U0001FA00-\U0001FA6F"  # Chess Symbols
+            "\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
+            "\U00002702-\U000027B0"  # Dingbats
+            "\U000024C2-\U0001F251"
+            "\U0001f926-\U0001f937"
+            "\U00010000-\U0010ffff"
+            "\u2640-\u2642"
+            "\u2600-\u2B55"
+            "\u200d"
+            "\u23cf"
+            "\u23e9"
+            "\u231a"
+            "\ufe0f"  # dingbats
+            "\u3030"
+            "]+",
+            re.UNICODE
+        )
+
+        # Remove emojis
+        text = emoji_pattern.sub('', text)
+
+        # Clean up extra spaces
+        text = ' '.join(text.split())
+
+        return text.strip()
+
     def parse_message(self, message_text: str) -> List[Dict]:
         """
         Parse a message to extract polymer names and prices
@@ -42,20 +88,24 @@ class PolymerParser:
         # 3. Price should NOT be part of the polymer name
 
         patterns = [
+            # With emoji indicators (🔴, 🔵) followed by polymer name
+            # Example: "0209 🔴 AKPC              14900" or "0209 🔵              14900"
+            r'([A-Za-z0-9][A-Za-z0-9\s\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s{2,}(\d{5}(?:[.,]\d+)?)',
+
             # Multiple spaces between name and price (most common in formatted messages)
             # Example: "Shurtan By456                15400"
             r'([A-Za-z][A-Za-z\s\-]+[A-Za-z0-9]+)\s{2,}(\d{5}(?:[.,]\d+)?)',
 
             # Tab or newline separated
-            r'([A-Za-z][A-Za-z\s\-]+[A-Za-z0-9]+)[\t\n]+(\d{5}(?:[.,]\d+)?)',
+            r'([A-Za-z0-9][A-Za-z0-9\s\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)[\t\n]+(\d{5}(?:[.,]\d+)?)',
 
             # With country flags
-            r'🇺🇿\s*([A-Za-z][A-Za-z\s\-]+[A-Za-z0-9]+)\s+(\d{5}(?:[.,]\d+)?)',
-            r'🇮🇷\s*([A-Za-z][A-Za-z\s\-]+[A-Za-z0-9]+)\s+(\d{5}(?:[.,]\d+)?)',
-            r'🇷🇺\s*([A-Za-z][A-Za-z\s\-]+[A-Za-z0-9]+)\s+(\d{5}(?:[.,]\d+)?)',
+            r'🇺🇿\s*([A-Za-z0-9][A-Za-z0-9\s\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s+(\d{5}(?:[.,]\d+)?)',
+            r'🇮🇷\s*([A-Za-z0-9][A-Za-z0-9\s\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s+(\d{5}(?:[.,]\d+)?)',
+            r'🇷🇺\s*([A-Za-z0-9][A-Za-z0-9\s\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s+(\d{5}(?:[.,]\d+)?)',
 
             # With explicit price indicators
-            r'([A-Za-z][A-Za-z\s\-]+[A-Za-z0-9]+)\s+(\d{5}(?:[.,]\d+)?)\s*(?:сумм|sum)',
+            r'([A-Za-z0-9][A-Za-z0-9\s\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s+(\d{5}(?:[.,]\d+)?)\s*(?:сумм|sum)',
         ]
 
         for pattern in patterns:
@@ -69,12 +119,15 @@ class PolymerParser:
                     name = groups[0].strip()
                     price_str = groups[1].strip()
 
-                    # Clean up the name - remove flags and extra spaces
-                    name = name.replace('🇺🇿', '').replace('🇮🇷', '').replace('🇷🇺', '').replace('🐫', '').strip()
+                    # Clean up the name - remove ALL emojis (including 🔴, 🔵, flags, etc.)
+                    name = self._remove_emojis(name)
                     name = ' '.join(name.split())
 
+                    # Remove trailing periods: "0120." -> "0120", "346." -> "346"
+                    name = name.rstrip('.')
+
                     # Validation: ensure name is reasonable
-                    if len(name) < 3 or name.isdigit():
+                    if len(name) < 1 or (len(name) < 3 and not name[0].isdigit()):
                         continue
 
                     # CRITICAL CHECK: Ensure the price is NOT part of the polymer name
@@ -147,13 +200,26 @@ CRITICAL RULES - FOLLOW THESE EXACTLY:
    - Example: "BL5200" does NOT have a price (5200 is part of the name)
    - Example: "Shurtan 1561" does NOT have a price (1561 is part of the name)
 6. Common polymer names include numbers: J150, J370, BL5200, 1561, etc. - these are NOT prices
-7. Ignore phone numbers (starting with +998, etc.), dates, and contact information
-8. Return ONLY valid JSON array format
+7. REMOVE ALL EMOJIS from polymer names (🔴, 🔵, 🟢, etc.) before returning
+   - Example: "0209 🔴 AKPC" → return as "0209 AKPC"
+   - Example: "0209 🔴Amir Kabir" → return as "0209 Amir Kabir"
+   - Example: "0209 🔵" → return as "0209"
+8. REMOVE TRAILING PERIODS from polymer names
+   - Example: "0120." → return as "0120"
+   - Example: "346." → return as "346"
+   - Example: "J150." → return as "J150"
+9. Ignore phone numbers (starting with +998, etc.), dates, and contact information
+10. Return ONLY valid JSON array format
 
-Examples of VALID entries (polymer WITH explicit price):
-- "Uz-Kor Gas J150              14900" → VALID (price 14900 is separate)
-- "Shurtan By456                15400" → VALID (price 15400 is separate)
-- "🇺🇿 Uz-Kor Gas Jm370       17600" → VALID (price 17600 is separate)
+Examples of VALID entries (polymer WITH explicit price, emojis and trailing periods removed):
+- "Uz-Kor Gas J150              14900" → {{"polymer_name": "Uz-Kor Gas J150", "price": 14900}}
+- "Shurtan By456                15400" → {{"polymer_name": "Shurtan By456", "price": 15400}}
+- "🇺🇿 Uz-Kor Gas Jm370       17600" → {{"polymer_name": "Uz-Kor Gas Jm370", "price": 17600}}
+- "0209 🔴 AKPC                 14900" → {{"polymer_name": "0209 AKPC", "price": 14900}}
+- "0209 🔴Amir Kabir            15400" → {{"polymer_name": "0209 Amir Kabir", "price": 15400}}
+- "0209 🔵                      16800" → {{"polymer_name": "0209", "price": 16800}}
+- "0120.                        14900" → {{"polymer_name": "0120", "price": 14900}}
+- "346.                         15400" → {{"polymer_name": "346", "price": 15400}}
 
 Examples of INVALID entries (NO price or price is part of name):
 - "Uz-Kor Gas J150🔥🔥" → INVALID (no price, only status symbol)
@@ -164,10 +230,12 @@ Examples of INVALID entries (NO price or price is part of name):
 Message:
 {message_text}
 
-Return a JSON array with ONLY entries that have explicit numeric prices >= 10000:
+Return a JSON array with ONLY entries that have explicit numeric prices >= 10000.
+IMPORTANT: Remove ALL emojis and trailing periods from polymer names:
 [
   {{"polymer_name": "Uz-Kor Gas J150", "price": 14900}},
-  {{"polymer_name": "Shurtan By456", "price": 15400}}
+  {{"polymer_name": "0209 AKPC", "price": 14900}},
+  {{"polymer_name": "0120", "price": 14900}}
 ]
 
 If no polymers with explicit prices found, return an empty array: []
@@ -221,6 +289,12 @@ If no polymers with explicit prices found, return an empty array: []
                             # Strict validation: price must be >= 10000
                             if price >= 10000:
                                 polymer_name = item.get('polymer_name', '').strip()
+
+                                # Clean emojis from polymer name
+                                polymer_name = self._remove_emojis(polymer_name)
+
+                                # Remove trailing periods: "0120." -> "0120", "346." -> "346"
+                                polymer_name = polymer_name.rstrip('.')
 
                                 # Double-check: ensure price is not derived from polymer name
                                 name_parts = polymer_name.split()
