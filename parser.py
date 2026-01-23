@@ -90,22 +90,23 @@ class PolymerParser:
         patterns = [
             # With emoji indicators (🔴, 🔵) followed by polymer name
             # Example: "0209 🔴 AKPC              14900" or "0209 🔵              14900"
-            r'([A-Za-z0-9][A-Za-z0-9\s\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s{2,}(\d{5}(?:[.,]\d+)?)',
+            # IMPORTANT: Use [ \t] instead of \s to avoid matching newlines (which would merge multiple lines)
+            r'([A-Za-z0-9][A-Za-z0-9 \t\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s{2,}(\d{5}(?:[.,]\d+)?)',
 
             # Multiple spaces between name and price (most common in formatted messages)
             # Example: "Shurtan By456                15400"
-            r'([A-Za-z][A-Za-z\s\-]+[A-Za-z0-9]+)\s{2,}(\d{5}(?:[.,]\d+)?)',
+            r'([A-Za-z][A-Za-z \t\-]+[A-Za-z0-9]+)\s{2,}(\d{5}(?:[.,]\d+)?)',
 
             # Tab or newline separated
-            r'([A-Za-z0-9][A-Za-z0-9\s\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)[\t\n]+(\d{5}(?:[.,]\d+)?)',
+            r'([A-Za-z0-9][A-Za-z0-9 \t\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)[\t\n]+(\d{5}(?:[.,]\d+)?)',
 
             # With country flags
-            r'🇺🇿\s*([A-Za-z0-9][A-Za-z0-9\s\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s+(\d{5}(?:[.,]\d+)?)',
-            r'🇮🇷\s*([A-Za-z0-9][A-Za-z0-9\s\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s+(\d{5}(?:[.,]\d+)?)',
-            r'🇷🇺\s*([A-Za-z0-9][A-Za-z0-9\s\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s+(\d{5}(?:[.,]\d+)?)',
+            r'🇺🇿\s*([A-Za-z0-9][A-Za-z0-9 \t\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s+(\d{5}(?:[.,]\d+)?)',
+            r'🇮🇷\s*([A-Za-z0-9][A-Za-z0-9 \t\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s+(\d{5}(?:[.,]\d+)?)',
+            r'🇷🇺\s*([A-Za-z0-9][A-Za-z0-9 \t\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s+(\d{5}(?:[.,]\d+)?)',
 
             # With explicit price indicators
-            r'([A-Za-z0-9][A-Za-z0-9\s\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s+(\d{5}(?:[.,]\d+)?)\s*(?:сумм|sum)',
+            r'([A-Za-z0-9][A-Za-z0-9 \t\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s+(\d{5}(?:[.,]\d+)?)\s*(?:сумм|sum)',
         ]
 
         for pattern in patterns:
