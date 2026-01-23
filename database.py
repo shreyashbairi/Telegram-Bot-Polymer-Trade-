@@ -287,3 +287,47 @@ class PolymerDatabase:
 
         conn.close()
         return results
+
+    def get_all_polymers_for_date(self, target_date: datetime) -> List[Dict]:
+        """Get all polymers with prices for a specific date"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT polymer_name, price, status, message_link, created_at
+            FROM polymer_prices
+            WHERE date = ?
+            AND price IS NOT NULL
+            ORDER BY polymer_name, created_at
+        ''', (target_date.date(),))
+
+        results = []
+        for row in cursor.fetchall():
+            results.append({
+                'polymer_name': row[0],
+                'price': row[1],
+                'status': row[2],
+                'message_link': row[3],
+                'created_at': row[4]
+            })
+
+        conn.close()
+        return results
+
+    def get_latest_date_with_data(self) -> Optional[str]:
+        """Get the most recent date that has polymer data"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT MAX(date) as latest_date
+            FROM polymer_prices
+            WHERE price IS NOT NULL
+        ''')
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row and row[0]:
+            return row[0]
+        return None
