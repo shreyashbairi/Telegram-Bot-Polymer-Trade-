@@ -229,203 +229,238 @@ The bot shows:
         await self.start_command(update, context)
 
     async def compare_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /compare command with multiple modes"""
+        """Handle /compare command with multiple modes, supporting quoted polymer names"""
         if not context.args:
             await update.message.reply_text(
                 "Please provide polymer name(s) to compare.\n\n"
                 "Usage:\n"
-                "/compare <polymer> - Compare against 7-day high/low\n"
+                "/compare <polymer> - Show high/low for 7 days\n"
                 "/compare <polymer> <polymer> - Compare two polymers\n"
-                "/compare <polymer> <date> - Compare for specific date\n"
+                "/compare <polymer> <date> - Show high/low for date\n"
                 "/compare <polymer> <polymer> <date> - Compare two for date\n\n"
+                "For names with spaces, use quotes:\n"
+                "/compare '2119 Arya'\n"
+                "/compare '2119 Arya' '2119 Iran'\n\n"
                 "Example: /compare J150\n"
                 "Example: /compare J150 Y130\n"
                 "Example: /compare J150 23.01.26"
             )
             return
 
-        # Parse arguments
-        args = context.args
-        polymer1 = args[0]
+        # Parse arguments with quote support
+        import shlex
+        try:
+            # Join all args back and parse with shlex to handle quotes
+            full_command = " ".join(context.args)
+            parsed_args = shlex.split(full_command)
+        except ValueError as e:
+            await update.message.reply_text(
+                f"Error parsing command: {e}\n\n"
+                "Make sure to close all quotes properly."
+            )
+            return
+
+        if not parsed_args:
+            await update.message.reply_text("Please provide polymer name(s) to compare.")
+            return
+
+        polymer1 = parsed_args[0]
         polymer2 = None
         target_date = None
 
         # Determine mode based on number of arguments
-        if len(args) == 1:
+        if len(parsed_args) == 1:
             # Mode: /compare <polymer>
-            # Compare polymer against its own 7-day high/low
             await self.compare_single_polymer(update, polymer1, None)
 
-        elif len(args) == 2:
+        elif len(parsed_args) == 2:
             # Could be: /compare <polymer> <polymer> OR /compare <polymer> <date>
             # Try to parse second arg as date
-            try:
-                date_patterns = [('%d.%m.%y', args[1]), ('%d.%m.%Y', args[1])]
-                for pattern, date_input in date_patterns:
-                    try:
-                        target_date = datetime.strptime(date_input, pattern)
-                        # Mode: /compare <polymer> <date>
-                        await self.compare_single_polymer(update, polymer1, target_date)
-                        return
-                    except ValueError:
-                        continue
+            date_patterns = [('%d.%m.%y', parsed_args[1]), ('%d.%m.%Y', parsed_args[1])]
+            is_date = False
 
-                # If not a date, treat as second polymer
+            for pattern, date_input in date_patterns:
+                try:
+                    target_date = datetime.strptime(date_input, pattern)
+                    is_date = True
+                    break
+                except ValueError:
+                    continue
+
+            if is_date:
+                # Mode: /compare <polymer> <date>
+                await self.compare_single_polymer(update, polymer1, target_date)
+            else:
                 # Mode: /compare <polymer> <polymer>
-                polymer2 = args[1]
+                polymer2 = parsed_args[1]
                 await self.compare_two_polymers(update, polymer1, polymer2, None)
 
-            except Exception as e:
-                # Assume it's a second polymer name
-                polymer2 = args[1]
-                await self.compare_two_polymers(update, polymer1, polymer2, None)
-
-        elif len(args) >= 3:
+        elif len(parsed_args) >= 3:
             # Mode: /compare <polymer> <polymer> <date>
-            polymer2 = args[1]
-            date_str = args[2]
+            polymer2 = parsed_args[1]
+            date_str = parsed_args[2]
 
             # Parse date
-            try:
-                date_patterns = [('%d.%m.%y', date_str), ('%d.%m.%Y', date_str)]
-                for pattern, date_input in date_patterns:
-                    try:
-                        target_date = datetime.strptime(date_input, pattern)
-                        break
-                    except ValueError:
-                        continue
+            date_patterns = [('%d.%m.%y', date_str), ('%d.%m.%Y', date_str)]
+            for pattern, date_input in date_patterns:
+                try:
+                    target_date = datetime.strptime(date_input, pattern)
+                    break
+                except ValueError:
+                    continue
 
-                if not target_date:
-                    await update.message.reply_text("Invalid date format. Use DD.MM.YY")
-                    return
+            if not target_date:
+                await update.message.reply_text("Invalid date format. Use DD.MM.YY")
+                return
 
-                await self.compare_two_polymers(update, polymer1, polymer2, target_date)
-
-            except Exception as e:
-                await update.message.reply_text(f"Error parsing date: {e}")
+            await self.compare_two_polymers(update, polymer1, polymer2, target_date)
 
     async def compare_single_polymer(self, update: Update, polymer_name: str, target_date: datetime = None):
-        """Compare single polymer against its high/low for 7 days or specific date"""
+        """Show highest and lowest prices for a polymer"""
 
         if target_date:
-            # Compare for specific date only
-            price_data = self.db.get_price_on_date(polymer_name, target_date)
+            # Show high/low for specific date
             price_stats = self.db.get_price_stats_for_date(polymer_name, target_date)
 
-            if not price_data:
+            if not price_stats:
                 await update.message.reply_text(
                     f"No data found for {polymer_name} on {target_date.strftime('%d.%m.%Y')}"
                 )
                 return
 
-            message = f"📊 Comparison for {polymer_name}\n"
+            message = f"📊 Price Range for {polymer_name}\n"
             message += f"Date: {target_date.strftime('%d.%m.%Y')}\n"
             message += "=" * 40 + "\n\n"
 
-            if price_stats and price_stats['count'] > 1:
-                price = price_data['price']
-                lowest = price_stats['lowest']
-                highest = price_stats['highest']
+            if price_stats['count'] > 1:
+                message += f"📉 Lowest Price: {price_stats['lowest']:.2f}\n"
+                if price_stats.get('lowest_link'):
+                    message += f"   🔗 {price_stats['lowest_link']}\n"
 
-                message += f"💰 Your Price: {price:.2f}\n"
-                message += f"📉 Day's Lowest: {lowest:.2f}\n"
-                message += f"📈 Day's Highest: {highest:.2f}\n\n"
+                message += f"\n📊 Mean Price: {price_stats['mean']:.2f}\n"
 
-                if price == lowest:
-                    message += "✅ This is the LOWEST price of the day!\n"
-                elif price == highest:
-                    message += "⚠️ This is the HIGHEST price of the day!\n"
-                else:
-                    pct_vs_low = ((price - lowest) / lowest) * 100
-                    pct_vs_high = ((price - highest) / highest) * 100
-                    message += f"📊 {pct_vs_low:+.1f}% vs lowest\n"
-                    message += f"📊 {pct_vs_high:+.1f}% vs highest\n"
+                message += f"\n📈 Highest Price: {price_stats['highest']:.2f}\n"
+                if price_stats.get('highest_link'):
+                    message += f"   🔗 {price_stats['highest_link']}\n"
+
+                diff = price_stats['highest'] - price_stats['lowest']
+                message += f"\n💼 Total Listings: {price_stats['count']}\n"
+                message += f"📊 Price Range: {diff:.2f}\n"
             else:
-                message += f"💰 Price: {price_data['price']:.2f}\n"
+                message += f"💰 Price: {price_stats['lowest']:.2f}\n"
+                if price_stats.get('lowest_link'):
+                    message += f"🔗 {price_stats['lowest_link']}\n"
                 message += "\n(Only one price entry for this day)"
 
         else:
-            # Compare for last 7 days
-            price_range = self.db.get_price_range_for_polymer(polymer_name, 7)
+            # Show high/low for last 7 days
+            today = datetime.now()
+            message = f"📊 7-Day Price Range for {polymer_name}\n"
+            message += "=" * 40 + "\n\n"
 
-            if not price_range:
+            has_data = False
+            for day in range(1, 8):
+                target = today - timedelta(days=day)
+                price_stats = self.db.get_price_stats_for_date(polymer_name, target)
+
+                if price_stats:
+                    has_data = True
+                    message += f"📅 Day {day} ({target.strftime('%d.%m.%Y')}):\n"
+
+                    if price_stats['count'] > 1:
+                        message += f"   📉 Low: {price_stats['lowest']:.2f}\n"
+                        if price_stats.get('lowest_link'):
+                            message += f"      🔗 {price_stats['lowest_link']}\n"
+
+                        message += f"   📈 High: {price_stats['highest']:.2f}\n"
+                        if price_stats.get('highest_link'):
+                            message += f"      🔗 {price_stats['highest_link']}\n"
+
+                        diff = price_stats['highest'] - price_stats['lowest']
+                        message += f"   📊 Range: {diff:.2f} ({price_stats['count']} listings)\n"
+                    else:
+                        message += f"   💰 Price: {price_stats['lowest']:.2f}\n"
+                        if price_stats.get('lowest_link'):
+                            message += f"      🔗 {price_stats['lowest_link']}\n"
+
+                    message += "\n"
+                else:
+                    message += f"📅 Day {day} ({target.strftime('%d.%m.%Y')}): No data\n\n"
+
+            if not has_data:
                 await update.message.reply_text(
                     f"No data found for {polymer_name} in the last 7 days"
                 )
                 return
 
-            today = datetime.now()
-            message = f"📊 7-Day Price Comparison for {polymer_name}\n"
-            message += "=" * 40 + "\n\n"
-            message += f"📉 7-Day Low: {price_range['lowest']:.2f}\n"
-            message += f"📈 7-Day High: {price_range['highest']:.2f}\n"
-            message += f"📊 Range: {price_range['highest'] - price_range['lowest']:.2f}\n\n"
-
-            # Show each day's price vs the range
-            for day in range(1, 8):
-                target = today - timedelta(days=day)
-                price_data = self.db.get_price_on_date(polymer_name, target)
-
-                if price_data:
-                    price = price_data['price']
-                    pct_vs_low = ((price - price_range['lowest']) / price_range['lowest']) * 100
-                    pct_vs_high = ((price - price_range['highest']) / price_range['highest']) * 100
-
-                    indicator = ""
-                    if price == price_range['lowest']:
-                        indicator = " 📉 LOWEST"
-                    elif price == price_range['highest']:
-                        indicator = " 📈 HIGHEST"
-
-                    message += f"Day {day} ({target.strftime('%d.%m')}): {price:.2f}{indicator}\n"
-                    message += f"   {pct_vs_low:+.1f}% vs low | {pct_vs_high:+.1f}% vs high\n\n"
-                else:
-                    message += f"Day {day} ({target.strftime('%d.%m')}): No data\n\n"
-
         await update.message.reply_text(message, disable_web_page_preview=True)
 
     async def compare_two_polymers(self, update: Update, polymer1: str, polymer2: str, target_date: datetime = None):
-        """Compare two polymers for 7 days or specific date"""
+        """Compare two polymers showing high/low for each"""
 
         if target_date:
             # Compare for specific date
-            price1 = self.db.get_price_on_date(polymer1, target_date)
-            price2 = self.db.get_price_on_date(polymer2, target_date)
+            stats1 = self.db.get_price_stats_for_date(polymer1, target_date)
+            stats2 = self.db.get_price_stats_for_date(polymer2, target_date)
 
-            if not price1 or not price2:
+            if not stats1 or not stats2:
                 missing = []
-                if not price1:
+                if not stats1:
                     missing.append(polymer1)
-                if not price2:
+                if not stats2:
                     missing.append(polymer2)
                 await update.message.reply_text(
                     f"No data found for {', '.join(missing)} on {target_date.strftime('%d.%m.%Y')}"
                 )
                 return
 
-            message = f"⚖️ Comparison: {price1['polymer_name']} vs {price2['polymer_name']}\n"
+            message = f"⚖️ Comparison: {polymer1} vs {polymer2}\n"
             message += f"Date: {target_date.strftime('%d.%m.%Y')}\n"
             message += "=" * 40 + "\n\n"
 
-            p1_price = price1['price']
-            p2_price = price2['price']
-            diff = p1_price - p2_price
-            pct_diff = (diff / p2_price) * 100
+            # Polymer 1
+            message += f"📊 {polymer1}:\n"
+            if stats1['count'] > 1:
+                message += f"   📉 Low: {stats1['lowest']:.2f}\n"
+                if stats1.get('lowest_link'):
+                    message += f"      🔗 {stats1['lowest_link']}\n"
+                message += f"   📈 High: {stats1['highest']:.2f}\n"
+                if stats1.get('highest_link'):
+                    message += f"      🔗 {stats1['highest_link']}\n"
+                message += f"   📊 Range: {stats1['highest'] - stats1['lowest']:.2f}\n"
+            else:
+                message += f"   💰 Price: {stats1['lowest']:.2f}\n"
+                if stats1.get('lowest_link'):
+                    message += f"      🔗 {stats1['lowest_link']}\n"
 
-            message += f"💰 {price1['polymer_name']}: {p1_price:.2f}\n"
-            if price1.get('message_link'):
-                message += f"   🔗 {price1['message_link']}\n"
+            message += f"\n📊 {polymer2}:\n"
+            if stats2['count'] > 1:
+                message += f"   📉 Low: {stats2['lowest']:.2f}\n"
+                if stats2.get('lowest_link'):
+                    message += f"      🔗 {stats2['lowest_link']}\n"
+                message += f"   📈 High: {stats2['highest']:.2f}\n"
+                if stats2.get('highest_link'):
+                    message += f"      🔗 {stats2['highest_link']}\n"
+                message += f"   📊 Range: {stats2['highest'] - stats2['lowest']:.2f}\n"
+            else:
+                message += f"   💰 Price: {stats2['lowest']:.2f}\n"
+                if stats2.get('lowest_link'):
+                    message += f"      🔗 {stats2['lowest_link']}\n"
 
-            message += f"\n💰 {price2['polymer_name']}: {p2_price:.2f}\n"
-            if price2.get('message_link'):
-                message += f"   🔗 {price2['message_link']}\n"
+            # Comparison
+            message += "\n" + "=" * 40 + "\n"
+            # Compare means or single prices
+            p1_compare = stats1['mean'] if stats1['count'] > 1 else stats1['lowest']
+            p2_compare = stats2['mean'] if stats2['count'] > 1 else stats2['lowest']
 
-            message += f"\n📊 Difference: {diff:+.2f} ({pct_diff:+.1f}%)\n"
+            diff = p1_compare - p2_compare
+            pct_diff = (diff / p2_compare) * 100
 
+            message += f"📊 Mean Difference: {diff:+.2f} ({pct_diff:+.1f}%)\n"
             if diff > 0:
-                message += f"✅ {price1['polymer_name']} is more expensive\n"
+                message += f"✅ {polymer1} is more expensive on average\n"
             elif diff < 0:
-                message += f"✅ {price2['polymer_name']} is more expensive\n"
+                message += f"✅ {polymer2} is more expensive on average\n"
             else:
                 message += "⚖️ Prices are equal\n"
 
@@ -440,15 +475,32 @@ The bot shows:
             has_data = False
             for day in range(1, 8):
                 target = today - timedelta(days=day)
-                price1_data = self.db.get_price_on_date(polymer1, target)
-                price2_data = self.db.get_price_on_date(polymer2, target)
+                stats1 = self.db.get_price_stats_for_date(polymer1, target)
+                stats2 = self.db.get_price_stats_for_date(polymer2, target)
 
-                if price1_data and price2_data:
+                if stats1 and stats2:
                     has_data = True
-                    p1 = price1_data['price']
-                    p2 = price2_data['price']
-                    diff = p1 - p2
-                    pct_diff = (diff / p2) * 100
+                    message += f"📅 Day {day} ({target.strftime('%d.%m')}):\n"
+
+                    # Polymer 1
+                    message += f"   {polymer1}:\n"
+                    if stats1['count'] > 1:
+                        message += f"      📉 {stats1['lowest']:.2f} | 📈 {stats1['highest']:.2f}\n"
+                    else:
+                        message += f"      💰 {stats1['lowest']:.2f}\n"
+
+                    # Polymer 2
+                    message += f"   {polymer2}:\n"
+                    if stats2['count'] > 1:
+                        message += f"      📉 {stats2['lowest']:.2f} | 📈 {stats2['highest']:.2f}\n"
+                    else:
+                        message += f"      💰 {stats2['lowest']:.2f}\n"
+
+                    # Comparison
+                    p1_compare = stats1['mean'] if stats1['count'] > 1 else stats1['lowest']
+                    p2_compare = stats2['mean'] if stats2['count'] > 1 else stats2['lowest']
+                    diff = p1_compare - p2_compare
+                    pct_diff = (diff / p2_compare) * 100
 
                     winner = ""
                     if diff > 0:
@@ -456,11 +508,9 @@ The bot shows:
                     elif diff < 0:
                         winner = f" ({polymer2} higher)"
 
-                    message += f"📅 Day {day} ({target.strftime('%d.%m')}):\n"
-                    message += f"   {polymer1}: {p1:.2f}\n"
-                    message += f"   {polymer2}: {p2:.2f}\n"
                     message += f"   Diff: {diff:+.2f} ({pct_diff:+.1f}%){winner}\n\n"
-                elif price1_data or price2_data:
+
+                elif stats1 or stats2:
                     message += f"📅 Day {day} ({target.strftime('%d.%m')}): Partial data\n\n"
                 else:
                     message += f"📅 Day {day} ({target.strftime('%d.%m')}): No data\n\n"
