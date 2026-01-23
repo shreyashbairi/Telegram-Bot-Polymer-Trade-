@@ -331,3 +331,30 @@ class PolymerDatabase:
         if row and row[0]:
             return row[0]
         return None
+
+    def get_price_range_for_polymer(self, polymer_name: str, days: int = 7) -> Optional[Dict]:
+        """Get the highest and lowest prices for a polymer over the last N days"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        normalized_name = self.normalize_polymer_name(polymer_name)
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=days)
+
+        cursor.execute('''
+            SELECT MIN(price) as lowest, MAX(price) as highest
+            FROM polymer_prices
+            WHERE normalized_name = ?
+            AND date BETWEEN ? AND ?
+            AND price IS NOT NULL
+        ''', (normalized_name, start_date, end_date))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row and row[0] and row[1]:
+            return {
+                'lowest': row[0],
+                'highest': row[1]
+            }
+        return None
