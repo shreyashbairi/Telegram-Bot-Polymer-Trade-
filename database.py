@@ -171,6 +171,33 @@ class PolymerDatabase:
             }
         return None
 
+    def get_latest_price_for_date(self, polymer_name: str, target_date: datetime) -> Optional[Dict]:
+        """Get the most recent price for a polymer on a specific date (chronologically latest)"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        normalized_name = self.normalize_polymer_name(polymer_name)
+
+        cursor.execute('''
+            SELECT price, message_link
+            FROM polymer_prices
+            WHERE normalized_name = ?
+            AND date = ?
+            AND price IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+        ''', (normalized_name, target_date.date()))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            return {
+                'price': row[0],
+                'link': row[1]
+            }
+        return None
+
     def get_price_stats_for_date(self, polymer_name: str, target_date: datetime) -> Optional[Dict]:
         """Get price statistics (min, max, mean) for a polymer on a specific date"""
         conn = sqlite3.connect(self.db_path)
@@ -189,9 +216,9 @@ class PolymerDatabase:
         ''', (normalized_name, target_date.date()))
 
         rows = cursor.fetchall()
-        conn.close()
 
         if not rows:
+            conn.close()
             return None
 
         prices = [row[0] for row in rows]
@@ -212,13 +239,34 @@ class PolymerDatabase:
 
         # Calculate mean as (highest + lowest) / 2
         mean_price = (highest_price + lowest_price) / 2
+        diff = highest_price - lowest_price
+
+        # Get latest price for this date
+        cursor.execute('''
+            SELECT price, message_link
+            FROM polymer_prices
+            WHERE normalized_name = ?
+            AND date = ?
+            AND price IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+        ''', (normalized_name, target_date.date()))
+
+        latest_row = cursor.fetchone()
+        conn.close()
+
+        latest_price = latest_row[0] if latest_row else None
+        latest_link = latest_row[1] if latest_row else None
 
         return {
             'lowest': lowest_price,
             'highest': highest_price,
             'mean': mean_price,
+            'diff': diff,
             'lowest_link': lowest_link,
             'highest_link': highest_link,
+            'latest_price': latest_price,
+            'latest_link': latest_link,
             'count': len(prices)
         }
 
