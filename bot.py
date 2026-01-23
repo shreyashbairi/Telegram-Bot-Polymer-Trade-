@@ -257,6 +257,13 @@ The bot shows:
             if not args_text:
                 await update.message.reply_text("Please provide polymer name(s) to compare.")
                 return
+
+            # Normalize quotes: replace smart/curly quotes with straight quotes
+            # This handles cases where Telegram converts quotes automatically
+            args_text = args_text.replace('"', '"').replace('"', '"')  # Smart double quotes
+            args_text = args_text.replace("'", "'").replace("'", "'")  # Smart single quotes
+            args_text = args_text.replace('«', '"').replace('»', '"')  # Guillemets
+
             parsed_args = shlex.split(args_text)
         except ValueError as e:
             await update.message.reply_text(
@@ -315,7 +322,15 @@ The bot shows:
                     continue
 
             if not target_date:
-                await update.message.reply_text("Invalid date format. Use DD.MM.YY")
+                # More helpful error message
+                await update.message.reply_text(
+                    f"Invalid date format: '{date_str}'. Use DD.MM.YY\n\n"
+                    f"Parsed {len(parsed_args)} arguments: {parsed_args}\n\n"
+                    "If you're trying to compare polymers with spaces in their names, "
+                    "make sure to use quotes:\n"
+                    "/compare '2119 Iran' '2119 Arya'\n\n"
+                    "Note: Use straight quotes (') not curly quotes ('')"
+                )
                 return
 
             await self.compare_two_polymers(update, polymer1, polymer2, target_date)
