@@ -230,10 +230,17 @@ The bot shows:
 
     async def compare_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /compare command with multiple modes, supporting quoted polymer names"""
-        # Get the full message text and extract arguments after /compare
-        message_text = update.message.text
+        # Handle both message and callback query contexts
+        if update.message:
+            message_text = update.message.text
+        elif update.callback_query:
+            message_text = update.callback_query.message.text
+        else:
+            return
+
         if not message_text or len(message_text.strip()) <= 8:  # "/compare" is 8 chars
-            await update.message.reply_text(
+            reply_method = update.message.reply_text if update.message else update.callback_query.message.reply_text
+            await reply_method(
                 "Please provide polymer name(s) to compare.\n\n"
                 "Usage:\n"
                 "/compare <polymer> - Show high/low for 7 days\n"
@@ -250,30 +257,47 @@ The bot shows:
             return
 
         # Parse arguments with quote support using the full message text
-        import shlex
+        import re
         try:
             # Extract everything after /compare command
             args_text = message_text.split(maxsplit=1)[1] if len(message_text.split(maxsplit=1)) > 1 else ""
             if not args_text:
-                await update.message.reply_text("Please provide polymer name(s) to compare.")
+                reply_method = update.message.reply_text if update.message else update.callback_query.message.reply_text
+                await reply_method("Please provide polymer name(s) to compare.")
                 return
 
-            # Normalize quotes: replace smart/curly quotes with straight quotes
-            # This handles cases where Telegram converts quotes automatically
-            args_text = args_text.replace('"', '"').replace('"', '"')  # Smart double quotes
-            args_text = args_text.replace("'", "'").replace("'", "'")  # Smart single quotes
-            args_text = args_text.replace('«', '"').replace('»', '"')  # Guillemets
+            # Normalize ALL quote-like characters to straight single quotes
+            # This handles Unicode quote variations
+            quote_chars = [
+                '"', '"',  # Smart double quotes U+201C, U+201D
+                "'", "'",  # Smart single quotes U+2018, U+2019
+                '‚', '„',  # Low quotes U+201A, U+201E
+                '«', '»',  # Guillemets U+00AB, U+00BB
+                '‹', '›',  # Single guillemets U+2039, U+203A
+                '′', '″',  # Prime symbols U+2032, U+2033
+                '`', '´',  # Grave and acute accents
+            ]
 
+            for char in quote_chars:
+                args_text = args_text.replace(char, "'")
+
+            # Also normalize straight double quotes to single quotes for consistency
+            args_text = args_text.replace('"', "'")
+
+            # Now parse with shlex using normalized quotes
+            import shlex
             parsed_args = shlex.split(args_text)
         except ValueError as e:
-            await update.message.reply_text(
+            reply_method = update.message.reply_text if update.message else update.callback_query.message.reply_text
+            await reply_method(
                 f"Error parsing command: {e}\n\n"
                 "Make sure to close all quotes properly."
             )
             return
 
         if not parsed_args:
-            await update.message.reply_text("Please provide polymer name(s) to compare.")
+            reply_method = update.message.reply_text if update.message else update.callback_query.message.reply_text
+            await reply_method("Please provide polymer name(s) to compare.")
             return
 
         polymer1 = parsed_args[0]
@@ -323,13 +347,14 @@ The bot shows:
 
             if not target_date:
                 # More helpful error message
-                await update.message.reply_text(
+                reply_method = update.message.reply_text if update.message else update.callback_query.message.reply_text
+                await reply_method(
                     f"Invalid date format: '{date_str}'. Use DD.MM.YY\n\n"
                     f"Parsed {len(parsed_args)} arguments: {parsed_args}\n\n"
                     "If you're trying to compare polymers with spaces in their names, "
                     "make sure to use quotes:\n"
                     "/compare '2119 Iran' '2119 Arya'\n\n"
-                    "Note: Use straight quotes (') not curly quotes ('')"
+                    "Note: Any type of quotes work - they will be normalized automatically"
                 )
                 return
 
@@ -337,13 +362,15 @@ The bot shows:
 
     async def compare_single_polymer(self, update: Update, polymer_name: str, target_date: datetime = None):
         """Show highest and lowest prices for a polymer"""
+        # Get reply method for both message and callback query contexts
+        reply_method = update.message.reply_text if update.message else update.callback_query.message.reply_text
 
         if target_date:
             # Show high/low for specific date
             price_stats = self.db.get_price_stats_for_date(polymer_name, target_date)
 
             if not price_stats:
-                await update.message.reply_text(
+                await reply_method(
                     f"No data found for {polymer_name} on {target_date.strftime('%d.%m.%Y')}"
                 )
                 return
@@ -425,15 +452,17 @@ The bot shows:
                     message += f"📅 Day {day} ({target.strftime('%d.%m')}): No data\n\n"
 
             if not has_data:
-                await update.message.reply_text(
+                await reply_method(
                     f"No data found for {polymer_name} in the last 7 days"
                 )
                 return
 
-        await update.message.reply_text(message, disable_web_page_preview=True)
+        await reply_method(message, disable_web_page_preview=True)
 
     async def compare_two_polymers(self, update: Update, polymer1: str, polymer2: str, target_date: datetime = None):
         """Compare two polymers showing high/low for each"""
+        # Get reply method for both message and callback query contexts
+        reply_method = update.message.reply_text if update.message else update.callback_query.message.reply_text
 
         if target_date:
             # Compare for specific date
@@ -446,7 +475,7 @@ The bot shows:
                     missing.append(polymer1)
                 if not stats2:
                     missing.append(polymer2)
-                await update.message.reply_text(
+                await reply_method(
                     f"No data found for {', '.join(missing)} on {target_date.strftime('%d.%m.%Y')}"
                 )
                 return
@@ -593,12 +622,12 @@ The bot shows:
                     message += f"📅 Day {day} ({target.strftime('%d.%m')}): No data\n\n"
 
             if not has_data:
-                await update.message.reply_text(
+                await reply_method(
                     f"No comparable data found for {polymer1} and {polymer2} in the last 7 days"
                 )
                 return
 
-        await update.message.reply_text(message, disable_web_page_preview=True)
+        await reply_method(message, disable_web_page_preview=True)
 
     async def show_polymer_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
         """Show paginated menu of available polymers"""
@@ -643,7 +672,12 @@ The bot shows:
         if update.message:
             await update.message.reply_text(message_text, reply_markup=reply_markup)
         elif update.callback_query:
-            await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+            try:
+                await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+            except Exception as e:
+                # Handle case where message content hasn't changed
+                if "Message is not modified" not in str(e):
+                    raise
 
     async def handle_polymer_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle polymer selection from inline keyboard"""
