@@ -230,7 +230,9 @@ The bot shows:
 
     async def compare_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /compare command with multiple modes, supporting quoted polymer names"""
-        if not context.args:
+        # Get the full message text and extract arguments after /compare
+        message_text = update.message.text
+        if not message_text or len(message_text.strip()) <= 8:  # "/compare" is 8 chars
             await update.message.reply_text(
                 "Please provide polymer name(s) to compare.\n\n"
                 "Usage:\n"
@@ -247,12 +249,15 @@ The bot shows:
             )
             return
 
-        # Parse arguments with quote support
+        # Parse arguments with quote support using the full message text
         import shlex
         try:
-            # Join all args back and parse with shlex to handle quotes
-            full_command = " ".join(context.args)
-            parsed_args = shlex.split(full_command)
+            # Extract everything after /compare command
+            args_text = message_text.split(maxsplit=1)[1] if len(message_text.split(maxsplit=1)) > 1 else ""
+            if not args_text:
+                await update.message.reply_text("Please provide polymer name(s) to compare.")
+                return
+            parsed_args = shlex.split(args_text)
         except ValueError as e:
             await update.message.reply_text(
                 f"Error parsing command: {e}\n\n"
@@ -328,34 +333,41 @@ The bot shows:
                 )
                 return
 
-            message = f"📊 Price Range for {polymer_name}\n"
+            message = f"📊 Price Analysis for {polymer_name}\n"
             message += f"Date: {target_date.strftime('%d.%m.%Y')}\n"
             message += "=" * 40 + "\n\n"
 
+            message += f"   {polymer_name}:\n"
             if price_stats['count'] > 1:
-                message += f"📉 Lowest Price: {price_stats['lowest']:.2f}\n"
-                if price_stats.get('lowest_link'):
-                    message += f"   🔗 {price_stats['lowest_link']}\n"
-
-                message += f"\n📊 Mean Price: {price_stats['mean']:.2f}\n"
-
-                message += f"\n📈 Highest Price: {price_stats['highest']:.2f}\n"
+                message += f"\tHighest: {price_stats['highest']:.2f}"
                 if price_stats.get('highest_link'):
-                    message += f"   🔗 {price_stats['highest_link']}\n"
+                    message += f" ({price_stats['highest_link']})"
+                message += "\n"
 
-                diff = price_stats['highest'] - price_stats['lowest']
-                message += f"\n💼 Total Listings: {price_stats['count']}\n"
-                message += f"📊 Price Range: {diff:.2f}\n"
-            else:
-                message += f"💰 Price: {price_stats['lowest']:.2f}\n"
+                message += f"\tLowest: {price_stats['lowest']:.2f}"
                 if price_stats.get('lowest_link'):
-                    message += f"🔗 {price_stats['lowest_link']}\n"
-                message += "\n(Only one price entry for this day)"
+                    message += f" ({price_stats['lowest_link']})"
+                message += "\n"
+
+                message += f"\tDiff: {price_stats['diff']:.2f}\n"
+                message += f"\tMean Price: {price_stats['mean']:.2f}\n"
+
+                if price_stats.get('latest_price'):
+                    message += f"\tLatest Price: {price_stats['latest_price']:.2f}"
+                    if price_stats.get('latest_link'):
+                        message += f" ({price_stats['latest_link']})"
+                    message += "\n"
+            else:
+                message += f"\tPrice: {price_stats['lowest']:.2f}"
+                if price_stats.get('lowest_link'):
+                    message += f" ({price_stats['lowest_link']})"
+                message += "\n"
+                message += "\n\t(Only one price entry for this day)"
 
         else:
             # Show high/low for last 7 days
             today = datetime.now()
-            message = f"📊 7-Day Price Range for {polymer_name}\n"
+            message = f"📊 7-Day Price Analysis:\n{polymer_name}\n"
             message += "=" * 40 + "\n\n"
 
             has_data = False
@@ -365,27 +377,37 @@ The bot shows:
 
                 if price_stats:
                     has_data = True
-                    message += f"📅 Day {day} ({target.strftime('%d.%m.%Y')}):\n"
+                    message += f"📅 Day {day} ({target.strftime('%d.%m')}):\n"
+                    message += f"   {polymer_name}:\n"
 
                     if price_stats['count'] > 1:
-                        message += f"   📉 Low: {price_stats['lowest']:.2f}\n"
-                        if price_stats.get('lowest_link'):
-                            message += f"      🔗 {price_stats['lowest_link']}\n"
-
-                        message += f"   📈 High: {price_stats['highest']:.2f}\n"
+                        message += f"\tHighest: {price_stats['highest']:.2f}"
                         if price_stats.get('highest_link'):
-                            message += f"      🔗 {price_stats['highest_link']}\n"
+                            message += f" ({price_stats['highest_link']})"
+                        message += "\n"
 
-                        diff = price_stats['highest'] - price_stats['lowest']
-                        message += f"   📊 Range: {diff:.2f} ({price_stats['count']} listings)\n"
-                    else:
-                        message += f"   💰 Price: {price_stats['lowest']:.2f}\n"
+                        message += f"\tLowest: {price_stats['lowest']:.2f}"
                         if price_stats.get('lowest_link'):
-                            message += f"      🔗 {price_stats['lowest_link']}\n"
+                            message += f" ({price_stats['lowest_link']})"
+                        message += "\n"
+
+                        message += f"\tDiff: {price_stats['diff']:.2f}\n"
+                        message += f"\tMean Price: {price_stats['mean']:.2f}\n"
+
+                        if price_stats.get('latest_price'):
+                            message += f"\tLatest Price of Day {day}: {price_stats['latest_price']:.2f}"
+                            if price_stats.get('latest_link'):
+                                message += f" ({price_stats['latest_link']})"
+                            message += "\n"
+                    else:
+                        message += f"\tPrice: {price_stats['lowest']:.2f}"
+                        if price_stats.get('lowest_link'):
+                            message += f" ({price_stats['lowest_link']})"
+                        message += "\n"
 
                     message += "\n"
                 else:
-                    message += f"📅 Day {day} ({target.strftime('%d.%m.%Y')}): No data\n\n"
+                    message += f"📅 Day {day} ({target.strftime('%d.%m')}): No data\n\n"
 
             if not has_data:
                 await update.message.reply_text(
@@ -419,56 +441,66 @@ The bot shows:
             message += "=" * 40 + "\n\n"
 
             # Polymer 1
-            message += f"📊 {polymer1}:\n"
+            message += f"   {polymer1}:\n"
             if stats1['count'] > 1:
-                message += f"   📉 Low: {stats1['lowest']:.2f}\n"
-                if stats1.get('lowest_link'):
-                    message += f"      🔗 {stats1['lowest_link']}\n"
-                message += f"   📈 High: {stats1['highest']:.2f}\n"
+                message += f"\tHighest: {stats1['highest']:.2f}"
                 if stats1.get('highest_link'):
-                    message += f"      🔗 {stats1['highest_link']}\n"
-                message += f"   📊 Range: {stats1['highest'] - stats1['lowest']:.2f}\n"
-            else:
-                message += f"   💰 Price: {stats1['lowest']:.2f}\n"
+                    message += f" ({stats1['highest_link']})"
+                message += "\n"
+
+                message += f"\tLowest: {stats1['lowest']:.2f}"
                 if stats1.get('lowest_link'):
-                    message += f"      🔗 {stats1['lowest_link']}\n"
+                    message += f" ({stats1['lowest_link']})"
+                message += "\n"
 
-            message += f"\n📊 {polymer2}:\n"
+                message += f"\tDiff: {stats1['diff']:.2f}\n"
+                message += f"\tMean Price: {stats1['mean']:.2f}\n"
+
+                if stats1.get('latest_price'):
+                    message += f"\tLatest Price: {stats1['latest_price']:.2f}"
+                    if stats1.get('latest_link'):
+                        message += f" ({stats1['latest_link']})"
+                    message += "\n"
+            else:
+                message += f"\tPrice: {stats1['lowest']:.2f}"
+                if stats1.get('lowest_link'):
+                    message += f" ({stats1['lowest_link']})"
+                message += "\n"
+
+            message += "\n"
+
+            # Polymer 2
+            message += f"   {polymer2}:\n"
             if stats2['count'] > 1:
-                message += f"   📉 Low: {stats2['lowest']:.2f}\n"
-                if stats2.get('lowest_link'):
-                    message += f"      🔗 {stats2['lowest_link']}\n"
-                message += f"   📈 High: {stats2['highest']:.2f}\n"
+                message += f"\tHighest: {stats2['highest']:.2f}"
                 if stats2.get('highest_link'):
-                    message += f"      🔗 {stats2['highest_link']}\n"
-                message += f"   📊 Range: {stats2['highest'] - stats2['lowest']:.2f}\n"
-            else:
-                message += f"   💰 Price: {stats2['lowest']:.2f}\n"
+                    message += f" ({stats2['highest_link']})"
+                message += "\n"
+
+                message += f"\tLowest: {stats2['lowest']:.2f}"
                 if stats2.get('lowest_link'):
-                    message += f"      🔗 {stats2['lowest_link']}\n"
+                    message += f" ({stats2['lowest_link']})"
+                message += "\n"
 
-            # Comparison
-            message += "\n" + "=" * 40 + "\n"
-            # Compare means or single prices
-            p1_compare = stats1['mean'] if stats1['count'] > 1 else stats1['lowest']
-            p2_compare = stats2['mean'] if stats2['count'] > 1 else stats2['lowest']
+                message += f"\tDiff: {stats2['diff']:.2f}\n"
+                message += f"\tMean Price: {stats2['mean']:.2f}\n"
 
-            diff = p1_compare - p2_compare
-            pct_diff = (diff / p2_compare) * 100
-
-            message += f"📊 Mean Difference: {diff:+.2f} ({pct_diff:+.1f}%)\n"
-            if diff > 0:
-                message += f"✅ {polymer1} is more expensive on average\n"
-            elif diff < 0:
-                message += f"✅ {polymer2} is more expensive on average\n"
+                if stats2.get('latest_price'):
+                    message += f"\tLatest Price: {stats2['latest_price']:.2f}"
+                    if stats2.get('latest_link'):
+                        message += f" ({stats2['latest_link']})"
+                    message += "\n"
             else:
-                message += "⚖️ Prices are equal\n"
+                message += f"\tPrice: {stats2['lowest']:.2f}"
+                if stats2.get('lowest_link'):
+                    message += f" ({stats2['lowest_link']})"
+                message += "\n"
 
         else:
             # Compare for last 7 days
             today = datetime.now()
 
-            message = f"⚖️ 7-Day Comparison\n"
+            message = f"⚖️ 7-Day Comparison:\n"
             message += f"{polymer1} vs {polymer2}\n"
             message += "=" * 40 + "\n\n"
 
@@ -485,30 +517,60 @@ The bot shows:
                     # Polymer 1
                     message += f"   {polymer1}:\n"
                     if stats1['count'] > 1:
-                        message += f"      📉 {stats1['lowest']:.2f} | 📈 {stats1['highest']:.2f}\n"
+                        message += f"\tHighest: {stats1['highest']:.2f}"
+                        if stats1.get('highest_link'):
+                            message += f" ({stats1['highest_link']})"
+                        message += "\n"
+
+                        message += f"\tLowest: {stats1['lowest']:.2f}"
+                        if stats1.get('lowest_link'):
+                            message += f" ({stats1['lowest_link']})"
+                        message += "\n"
+
+                        message += f"\tDiff: {stats1['diff']:.2f}\n"
+                        message += f"\tMean Price: {stats1['mean']:.2f}\n"
+
+                        if stats1.get('latest_price'):
+                            message += f"\tLatest Price of Day {day}: {stats1['latest_price']:.2f}"
+                            if stats1.get('latest_link'):
+                                message += f" ({stats1['latest_link']})"
+                            message += "\n"
                     else:
-                        message += f"      💰 {stats1['lowest']:.2f}\n"
+                        message += f"\tPrice: {stats1['lowest']:.2f}"
+                        if stats1.get('lowest_link'):
+                            message += f" ({stats1['lowest_link']})"
+                        message += "\n"
+
+                    message += "\n"
 
                     # Polymer 2
                     message += f"   {polymer2}:\n"
                     if stats2['count'] > 1:
-                        message += f"      📉 {stats2['lowest']:.2f} | 📈 {stats2['highest']:.2f}\n"
+                        message += f"\tHighest: {stats2['highest']:.2f}"
+                        if stats2.get('highest_link'):
+                            message += f" ({stats2['highest_link']})"
+                        message += "\n"
+
+                        message += f"\tLowest: {stats2['lowest']:.2f}"
+                        if stats2.get('lowest_link'):
+                            message += f" ({stats2['lowest_link']})"
+                        message += "\n"
+
+                        message += f"\tDiff: {stats2['diff']:.2f}\n"
+                        message += f"\tMean Price: {stats2['mean']:.2f}\n"
+
+                        if stats2.get('latest_price'):
+                            message += f"\tLatest Price of Day {day}: {stats2['latest_price']:.2f}"
+                            if stats2.get('latest_link'):
+                                message += f" ({stats2['latest_link']})"
+                            message += "\n"
                     else:
-                        message += f"      💰 {stats2['lowest']:.2f}\n"
+                        message += f"\tPrice: {stats2['lowest']:.2f}"
+                        if stats2.get('lowest_link'):
+                            message += f" ({stats2['lowest_link']})"
+                        message += "\n"
 
-                    # Comparison
-                    p1_compare = stats1['mean'] if stats1['count'] > 1 else stats1['lowest']
-                    p2_compare = stats2['mean'] if stats2['count'] > 1 else stats2['lowest']
-                    diff = p1_compare - p2_compare
-                    pct_diff = (diff / p2_compare) * 100
-
-                    winner = ""
-                    if diff > 0:
-                        winner = f" ({polymer1} higher)"
-                    elif diff < 0:
-                        winner = f" ({polymer2} higher)"
-
-                    message += f"   Diff: {diff:+.2f} ({pct_diff:+.1f}%){winner}\n\n"
+                    message += "\n"
 
                 elif stats1 or stats2:
                     message += f"📅 Day {day} ({target.strftime('%d.%m')}): Partial data\n\n"
