@@ -199,10 +199,10 @@ The bot shows:
 
         for idx, polymer in enumerate(polymers, 1):
             polymer_info = f"{idx}. {polymer['polymer_name']}\n"
-            polymer_info += f"   💰 Price: {polymer['price']:.2f}\n"
+            polymer_info += f"   💰 Price: {polymer['price']:.2f}"
             if polymer.get('message_link'):
-                polymer_info += f"   🔗 {polymer['message_link']}\n"
-            polymer_info += "\n"
+                polymer_info += f" <a href='{polymer['message_link']}'>🔗</a>"
+            polymer_info += "\n\n"
 
             # Check if adding this polymer would exceed the limit
             if len(current_message) + len(polymer_info) > 4000:
@@ -217,7 +217,7 @@ The bot shows:
 
         # Send all messages
         for msg in messages_to_send:
-            await update.message.reply_text(msg, disable_web_page_preview=True)
+            await update.message.reply_text(msg, disable_web_page_preview=True, parse_mode='HTML')
 
     async def clear_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /clear command - simulates clearing chat and restarts"""
@@ -383,12 +383,12 @@ The bot shows:
             if price_stats['count'] > 1:
                 message += f"\tHighest: {price_stats['highest']:.2f}"
                 if price_stats.get('highest_link'):
-                    message += f" ({price_stats['highest_link']})"
+                    message += f" <a href='{price_stats['highest_link']}'>🔗</a>"
                 message += "\n"
 
                 message += f"\tLowest: {price_stats['lowest']:.2f}"
                 if price_stats.get('lowest_link'):
-                    message += f" ({price_stats['lowest_link']})"
+                    message += f" <a href='{price_stats['lowest_link']}'>🔗</a>"
                 message += "\n"
 
                 message += f"\tDiff: {price_stats['diff']:.2f}\n"
@@ -397,12 +397,12 @@ The bot shows:
                 if price_stats.get('latest_price'):
                     message += f"\tLatest Price: {price_stats['latest_price']:.2f}"
                     if price_stats.get('latest_link'):
-                        message += f" ({price_stats['latest_link']})"
+                        message += f" <a href='{price_stats['latest_link']}'>🔗</a>"
                     message += "\n"
             else:
                 message += f"\tPrice: {price_stats['lowest']:.2f}"
                 if price_stats.get('lowest_link'):
-                    message += f" ({price_stats['lowest_link']})"
+                    message += f" <a href='{price_stats['lowest_link']}'>🔗</a>"
                 message += "\n"
                 message += "\n\t(Only one price entry for this day)"
 
@@ -425,12 +425,12 @@ The bot shows:
                     if price_stats['count'] > 1:
                         message += f"\tHighest: {price_stats['highest']:.2f}"
                         if price_stats.get('highest_link'):
-                            message += f" ({price_stats['highest_link']})"
+                            message += f" <a href='{price_stats['highest_link']}'>🔗</a>"
                         message += "\n"
 
                         message += f"\tLowest: {price_stats['lowest']:.2f}"
                         if price_stats.get('lowest_link'):
-                            message += f" ({price_stats['lowest_link']})"
+                            message += f" <a href='{price_stats['lowest_link']}'>🔗</a>"
                         message += "\n"
 
                         message += f"\tDiff: {price_stats['diff']:.2f}\n"
@@ -439,12 +439,12 @@ The bot shows:
                         if price_stats.get('latest_price'):
                             message += f"\tLatest Price of Day {day}: {price_stats['latest_price']:.2f}"
                             if price_stats.get('latest_link'):
-                                message += f" ({price_stats['latest_link']})"
+                                message += f" <a href='{price_stats['latest_link']}'>🔗</a>"
                             message += "\n"
                     else:
                         message += f"\tPrice: {price_stats['lowest']:.2f}"
                         if price_stats.get('lowest_link'):
-                            message += f" ({price_stats['lowest_link']})"
+                            message += f" <a href='{price_stats['lowest_link']}'>🔗</a>"
                         message += "\n"
 
                     message += "\n"
@@ -457,7 +457,7 @@ The bot shows:
                 )
                 return
 
-        await reply_method(message, disable_web_page_preview=True)
+        await reply_method(message, disable_web_page_preview=True, parse_mode='HTML')
 
     async def compare_two_polymers(self, update: Update, polymer1: str, polymer2: str, target_date: datetime = None):
         """Compare two polymers showing high/low for each"""
@@ -489,12 +489,12 @@ The bot shows:
             if stats1['count'] > 1:
                 message += f"\tHighest: {stats1['highest']:.2f}"
                 if stats1.get('highest_link'):
-                    message += f" ({stats1['highest_link']})"
+                    message += f" <a href='{stats1['highest_link']}'>🔗</a>"
                 message += "\n"
 
                 message += f"\tLowest: {stats1['lowest']:.2f}"
                 if stats1.get('lowest_link'):
-                    message += f" ({stats1['lowest_link']})"
+                    message += f" <a href='{stats1['lowest_link']}'>🔗</a>"
                 message += "\n"
 
                 message += f"\tDiff: {stats1['diff']:.2f}\n"
@@ -503,12 +503,12 @@ The bot shows:
                 if stats1.get('latest_price'):
                     message += f"\tLatest Price: {stats1['latest_price']:.2f}"
                     if stats1.get('latest_link'):
-                        message += f" ({stats1['latest_link']})"
+                        message += f" <a href='{stats1['latest_link']}'>🔗</a>"
                     message += "\n"
             else:
                 message += f"\tPrice: {stats1['lowest']:.2f}"
                 if stats1.get('lowest_link'):
-                    message += f" ({stats1['lowest_link']})"
+                    message += f" <a href='{stats1['lowest_link']}'>🔗</a>"
                 message += "\n"
 
             message += "\n"
@@ -518,12 +518,12 @@ The bot shows:
             if stats2['count'] > 1:
                 message += f"\tHighest: {stats2['highest']:.2f}"
                 if stats2.get('highest_link'):
-                    message += f" ({stats2['highest_link']})"
+                    message += f" <a href='{stats2['highest_link']}'>🔗</a>"
                 message += "\n"
 
                 message += f"\tLowest: {stats2['lowest']:.2f}"
                 if stats2.get('lowest_link'):
-                    message += f" ({stats2['lowest_link']})"
+                    message += f" <a href='{stats2['lowest_link']}'>🔗</a>"
                 message += "\n"
 
                 message += f"\tDiff: {stats2['diff']:.2f}\n"
@@ -532,12 +532,12 @@ The bot shows:
                 if stats2.get('latest_price'):
                     message += f"\tLatest Price: {stats2['latest_price']:.2f}"
                     if stats2.get('latest_link'):
-                        message += f" ({stats2['latest_link']})"
+                        message += f" <a href='{stats2['latest_link']}'>🔗</a>"
                     message += "\n"
             else:
                 message += f"\tPrice: {stats2['lowest']:.2f}"
                 if stats2.get('lowest_link'):
-                    message += f" ({stats2['lowest_link']})"
+                    message += f" <a href='{stats2['lowest_link']}'>🔗</a>"
                 message += "\n"
 
         else:
@@ -554,80 +554,84 @@ The bot shows:
                 stats1 = self.db.get_price_stats_for_date(polymer1, target)
                 stats2 = self.db.get_price_stats_for_date(polymer2, target)
 
-                if stats1 and stats2:
+                if stats1 or stats2:
                     has_data = True
                     message += f"📅 Day {day} ({target.strftime('%d.%m')}):\n"
 
                     # Polymer 1
                     message += f"   {polymer1}:\n"
-                    if stats1['count'] > 1:
-                        message += f"\tHighest: {stats1['highest']:.2f}"
-                        if stats1.get('highest_link'):
-                            message += f" ({stats1['highest_link']})"
-                        message += "\n"
+                    if stats1:
+                        if stats1['count'] > 1:
+                            message += f"\tHighest: {stats1['highest']:.2f}"
+                            if stats1.get('highest_link'):
+                                message += f" <a href='{stats1['highest_link']}'>🔗</a>"
+                            message += "\n"
 
-                        message += f"\tLowest: {stats1['lowest']:.2f}"
-                        if stats1.get('lowest_link'):
-                            message += f" ({stats1['lowest_link']})"
-                        message += "\n"
+                            message += f"\tLowest: {stats1['lowest']:.2f}"
+                            if stats1.get('lowest_link'):
+                                message += f" <a href='{stats1['lowest_link']}'>🔗</a>"
+                            message += "\n"
 
-                        message += f"\tDiff: {stats1['diff']:.2f}\n"
-                        message += f"\tMean Price: {stats1['mean']:.2f}\n"
+                            message += f"\tDiff: {stats1['diff']:.2f}\n"
+                            message += f"\tMean Price: {stats1['mean']:.2f}\n"
 
-                        if stats1.get('latest_price'):
-                            message += f"\tLatest Price of Day {day}: {stats1['latest_price']:.2f}"
-                            if stats1.get('latest_link'):
-                                message += f" ({stats1['latest_link']})"
+                            if stats1.get('latest_price'):
+                                message += f"\tLatest Price of Day {day}: {stats1['latest_price']:.2f}"
+                                if stats1.get('latest_link'):
+                                    message += f" <a href='{stats1['latest_link']}'>🔗</a>"
+                                message += "\n"
+                        else:
+                            message += f"\tPrice: {stats1['lowest']:.2f}"
+                            if stats1.get('lowest_link'):
+                                message += f" <a href='{stats1['lowest_link']}'>🔗</a>"
                             message += "\n"
                     else:
-                        message += f"\tPrice: {stats1['lowest']:.2f}"
-                        if stats1.get('lowest_link'):
-                            message += f" ({stats1['lowest_link']})"
-                        message += "\n"
+                        message += "\tNo data\n"
 
                     message += "\n"
 
                     # Polymer 2
                     message += f"   {polymer2}:\n"
-                    if stats2['count'] > 1:
-                        message += f"\tHighest: {stats2['highest']:.2f}"
-                        if stats2.get('highest_link'):
-                            message += f" ({stats2['highest_link']})"
-                        message += "\n"
+                    if stats2:
+                        if stats2['count'] > 1:
+                            message += f"\tHighest: {stats2['highest']:.2f}"
+                            if stats2.get('highest_link'):
+                                message += f" <a href='{stats2['highest_link']}'>🔗</a>"
+                            message += "\n"
 
-                        message += f"\tLowest: {stats2['lowest']:.2f}"
-                        if stats2.get('lowest_link'):
-                            message += f" ({stats2['lowest_link']})"
-                        message += "\n"
+                            message += f"\tLowest: {stats2['lowest']:.2f}"
+                            if stats2.get('lowest_link'):
+                                message += f" <a href='{stats2['lowest_link']}'>🔗</a>"
+                            message += "\n"
 
-                        message += f"\tDiff: {stats2['diff']:.2f}\n"
-                        message += f"\tMean Price: {stats2['mean']:.2f}\n"
+                            message += f"\tDiff: {stats2['diff']:.2f}\n"
+                            message += f"\tMean Price: {stats2['mean']:.2f}\n"
 
-                        if stats2.get('latest_price'):
-                            message += f"\tLatest Price of Day {day}: {stats2['latest_price']:.2f}"
-                            if stats2.get('latest_link'):
-                                message += f" ({stats2['latest_link']})"
+                            if stats2.get('latest_price'):
+                                message += f"\tLatest Price of Day {day}: {stats2['latest_price']:.2f}"
+                                if stats2.get('latest_link'):
+                                    message += f" <a href='{stats2['latest_link']}'>🔗</a>"
+                                message += "\n"
+                        else:
+                            message += f"\tPrice: {stats2['lowest']:.2f}"
+                            if stats2.get('lowest_link'):
+                                message += f" <a href='{stats2['lowest_link']}'>🔗</a>"
                             message += "\n"
                     else:
-                        message += f"\tPrice: {stats2['lowest']:.2f}"
-                        if stats2.get('lowest_link'):
-                            message += f" ({stats2['lowest_link']})"
-                        message += "\n"
+                        message += "\tNo data\n"
 
                     message += "\n"
 
-                elif stats1 or stats2:
-                    message += f"📅 Day {day} ({target.strftime('%d.%m')}): Partial data\n\n"
                 else:
                     message += f"📅 Day {day} ({target.strftime('%d.%m')}): No data\n\n"
 
             if not has_data:
                 await reply_method(
-                    f"No comparable data found for {polymer1} and {polymer2} in the last 7 days"
+                    f"No data found for {polymer1} and {polymer2} in the last 7 days"
                 )
                 return
 
-        await reply_method(message, disable_web_page_preview=True)
+        await reply_method(message, disable_web_page_preview=True, parse_mode='HTML')
 
     async def show_polymer_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
         """Show paginated menu of available polymers"""
@@ -742,10 +746,10 @@ The bot shows:
                 has_data = True
                 price_str = f"{price_data['price']:.2f}" if price_data['price'] else price_data['status']
                 message += f"📅 Day {day} ({target_date.strftime('%Y-%m-%d')}):\n"
-                message += f"   💰 {price_str}\n"
+                message += f"   💰 {price_str}"
                 if price_data.get('message_link'):
-                    message += f"   🔗 {price_data['message_link']}\n"
-                message += "\n"
+                    message += f" <a href='{price_data['message_link']}'>🔗</a>"
+                message += "\n\n"
             else:
                 message += f"📅 Day {day} ({target_date.strftime('%Y-%m-%d')}): No data\n\n"
 
@@ -759,24 +763,27 @@ The bot shows:
 
         if price_stats and price_stats['count'] > 1:
             # Multiple prices on this day, show statistics
-            message += f"   📉 Lowest Price: {price_stats['lowest']:.2f}\n"
+            message += f"   📉 Lowest Price: {price_stats['lowest']:.2f}"
             if price_stats.get('lowest_link'):
-                message += f"      🔗 {price_stats['lowest_link']}\n"
+                message += f" <a href='{price_stats['lowest_link']}'>🔗</a>"
+            message += "\n"
 
             message += f"\n   📊 Mean Price: {price_stats['mean']:.2f}\n"
 
-            message += f"\n   📈 Highest Price: {price_stats['highest']:.2f}\n"
+            message += f"\n   📈 Highest Price: {price_stats['highest']:.2f}"
             if price_stats.get('highest_link'):
-                message += f"      🔗 {price_stats['highest_link']}\n"
+                message += f" <a href='{price_stats['highest_link']}'>🔗</a>"
+            message += "\n"
 
             message += f"\n   💼 Total Listings: {price_stats['count']}\n"
 
         else:
             # Only one price or no stats available
             latest_price_str = f"{latest_price['price']:.2f}" if latest_price['price'] else latest_price['status']
-            message += f"   💰 Price: {latest_price_str}\n"
+            message += f"   💰 Price: {latest_price_str}"
             if latest_price.get('message_link'):
-                message += f"   🔗 {latest_price['message_link']}\n"
+                message += f" <a href='{latest_price['message_link']}'>🔗</a>"
+            message += "\n"
 
         # Warning if no historical data
         if not has_data:
@@ -784,10 +791,10 @@ The bot shows:
 
         # Send the message
         if isinstance(update_or_query, Update):
-            await update_or_query.message.reply_text(message, disable_web_page_preview=True)
+            await update_or_query.message.reply_text(message, disable_web_page_preview=True, parse_mode='HTML')
         else:
             # It's a callback query
-            await update_or_query.message.reply_text(message, disable_web_page_preview=True)
+            await update_or_query.message.reply_text(message, disable_web_page_preview=True, parse_mode='HTML')
 
     async def run(self):
         """Run the bot"""
