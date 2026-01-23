@@ -123,8 +123,11 @@ class PolymerParser:
                     name = self._remove_emojis(name)
                     name = ' '.join(name.split())
 
+                    # Remove trailing periods: "0120." -> "0120", "346." -> "346"
+                    name = name.rstrip('.')
+
                     # Validation: ensure name is reasonable
-                    if len(name) < 3 or name.isdigit():
+                    if len(name) < 1 or (len(name) < 3 and not name[0].isdigit()):
                         continue
 
                     # CRITICAL CHECK: Ensure the price is NOT part of the polymer name
@@ -201,16 +204,22 @@ CRITICAL RULES - FOLLOW THESE EXACTLY:
    - Example: "0209 🔴 AKPC" → return as "0209 AKPC"
    - Example: "0209 🔴Amir Kabir" → return as "0209 Amir Kabir"
    - Example: "0209 🔵" → return as "0209"
-8. Ignore phone numbers (starting with +998, etc.), dates, and contact information
-9. Return ONLY valid JSON array format
+8. REMOVE TRAILING PERIODS from polymer names
+   - Example: "0120." → return as "0120"
+   - Example: "346." → return as "346"
+   - Example: "J150." → return as "J150"
+9. Ignore phone numbers (starting with +998, etc.), dates, and contact information
+10. Return ONLY valid JSON array format
 
-Examples of VALID entries (polymer WITH explicit price, emojis removed):
+Examples of VALID entries (polymer WITH explicit price, emojis and trailing periods removed):
 - "Uz-Kor Gas J150              14900" → {{"polymer_name": "Uz-Kor Gas J150", "price": 14900}}
 - "Shurtan By456                15400" → {{"polymer_name": "Shurtan By456", "price": 15400}}
 - "🇺🇿 Uz-Kor Gas Jm370       17600" → {{"polymer_name": "Uz-Kor Gas Jm370", "price": 17600}}
 - "0209 🔴 AKPC                 14900" → {{"polymer_name": "0209 AKPC", "price": 14900}}
 - "0209 🔴Amir Kabir            15400" → {{"polymer_name": "0209 Amir Kabir", "price": 15400}}
 - "0209 🔵                      16800" → {{"polymer_name": "0209", "price": 16800}}
+- "0120.                        14900" → {{"polymer_name": "0120", "price": 14900}}
+- "346.                         15400" → {{"polymer_name": "346", "price": 15400}}
 
 Examples of INVALID entries (NO price or price is part of name):
 - "Uz-Kor Gas J150🔥🔥" → INVALID (no price, only status symbol)
@@ -222,10 +231,11 @@ Message:
 {message_text}
 
 Return a JSON array with ONLY entries that have explicit numeric prices >= 10000.
-IMPORTANT: Remove ALL emojis from polymer names:
+IMPORTANT: Remove ALL emojis and trailing periods from polymer names:
 [
   {{"polymer_name": "Uz-Kor Gas J150", "price": 14900}},
-  {{"polymer_name": "0209 AKPC", "price": 14900}}
+  {{"polymer_name": "0209 AKPC", "price": 14900}},
+  {{"polymer_name": "0120", "price": 14900}}
 ]
 
 If no polymers with explicit prices found, return an empty array: []
@@ -282,6 +292,9 @@ If no polymers with explicit prices found, return an empty array: []
 
                                 # Clean emojis from polymer name
                                 polymer_name = self._remove_emojis(polymer_name)
+
+                                # Remove trailing periods: "0120." -> "0120", "346." -> "346"
+                                polymer_name = polymer_name.rstrip('.')
 
                                 # Double-check: ensure price is not derived from polymer name
                                 name_parts = polymer_name.split()

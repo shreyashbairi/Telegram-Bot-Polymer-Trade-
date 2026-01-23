@@ -83,6 +83,9 @@ class PolymerDatabase:
         # Remove emojis first
         normalized = emoji_pattern.sub('', name.strip())
 
+        # Remove trailing periods: "0120." -> "0120", "346." -> "346"
+        normalized = normalized.rstrip('.')
+
         # Convert to lowercase
         normalized = normalized.lower()
 
