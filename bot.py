@@ -30,6 +30,7 @@ class PolymerPriceBot:
         self.app.add_handler(CommandHandler("help", self.help_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CommandHandler("list", self.list_polymers_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CommandHandler("search", self.search_command, filters=filters.ChatType.PRIVATE))
+        self.app.add_handler(CommandHandler("daily", self.daily_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CallbackQueryHandler(self.handle_polymer_selection))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, self.handle_text_query))
 
@@ -45,6 +46,7 @@ I can help you check historical prices for various polymers.
 Commands:
 /list - Browse all available polymers
 /search <name> - Search for specific polymers
+/daily [date] - View all polymers for a specific day
 /help - Show detailed help
 
 You can also just type the polymer name (e.g., "J150", "Y130") to get its 7-day price history with message links.
@@ -62,24 +64,28 @@ Polymer Price Bot Help 📊
 How to use:
 1. Use /list to see all available polymers
 2. Use /search <name> to search for specific polymers
-3. Click on a polymer name or type it directly
-4. Get price history for the last 7 days
+3. Use /daily [date] to view all polymers for a day
+4. Click on a polymer name or type it directly
+5. Get price history for the last 7 days
 
 Commands:
 /start - Start the bot and show menu
 /list - Browse all polymers
 /search <name> - Search for polymers (e.g., /search J150)
+/daily [date] - View all polymers for a day (e.g., /daily 23.01.26)
 /help - Show this help message
 
 Examples:
 - Type "J150" to get J150 price history
 - Use /search shurtan to find all Shurtan polymers
-- Use /list to browse all available polymers
+- Use /daily to see today's all polymer prices
+- Use /daily 23.01.26 to see prices from Jan 23, 2026
 
 The bot shows:
 ✅ Daily prices for the last 7 days
 ✅ Message links for each price entry
 ✅ Latest available price if historical data is missing
+✅ All polymers with prices for a specific day
 """
         await update.message.reply_text(help_message)
 
@@ -120,6 +126,91 @@ The bot shows:
         message_text = f"🔍 Search results for '{search_query}' ({len(results)} found):"
 
         await update.message.reply_text(message_text, reply_markup=reply_markup)
+
+    async def daily_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /daily [date] command"""
+        target_date = None
+
+        # Parse date if provided
+        if context.args:
+            date_str = context.args[0]
+            # Expected format: DD.MM.YY (e.g., 23.01.26)
+            try:
+                # Parse the date - try both DD.MM.YY and DD.MM.YYYY formats
+                date_patterns = [
+                    ('%d.%m.%y', date_str),
+                    ('%d.%m.%Y', date_str)
+                ]
+
+                for pattern, date_input in date_patterns:
+                    try:
+                        target_date = datetime.strptime(date_input, pattern)
+                        break
+                    except ValueError:
+                        continue
+
+                if not target_date:
+                    await update.message.reply_text(
+                        "Invalid date format. Please use DD.MM.YY\n\n"
+                        "Example: /daily 23.01.26"
+                    )
+                    return
+
+            except Exception as e:
+                await update.message.reply_text(
+                    "Error parsing date. Please use DD.MM.YY\n\n"
+                    "Example: /daily 23.01.26"
+                )
+                return
+        else:
+            # No date provided, use latest date with data
+            latest_date_str = self.db.get_latest_date_with_data()
+            if not latest_date_str:
+                await update.message.reply_text("No polymer data available in the database.")
+                return
+
+            target_date = datetime.strptime(latest_date_str, '%Y-%m-%d')
+
+        # Get all polymers for this date
+        polymers = self.db.get_all_polymers_for_date(target_date)
+
+        if not polymers:
+            await update.message.reply_text(
+                f"No polymer data found for {target_date.strftime('%d.%m.%Y')}."
+            )
+            return
+
+        # Build the response message
+        message = f"📅 Daily Polymer Prices - {target_date.strftime('%d.%m.%Y')}\n"
+        message += f"Total Polymers: {len(polymers)}\n"
+        message += "=" * 40 + "\n\n"
+
+        # Group polymers to avoid message length issues
+        # Telegram has a 4096 character limit per message
+        messages_to_send = []
+        current_message = message
+
+        for idx, polymer in enumerate(polymers, 1):
+            polymer_info = f"{idx}. {polymer['polymer_name']}\n"
+            polymer_info += f"   💰 Price: {polymer['price']:.2f}\n"
+            if polymer.get('message_link'):
+                polymer_info += f"   🔗 {polymer['message_link']}\n"
+            polymer_info += "\n"
+
+            # Check if adding this polymer would exceed the limit
+            if len(current_message) + len(polymer_info) > 4000:
+                messages_to_send.append(current_message)
+                current_message = f"📅 Daily Polymer Prices - {target_date.strftime('%d.%m.%Y')} (continued)\n\n"
+
+            current_message += polymer_info
+
+        # Add the last message
+        if current_message:
+            messages_to_send.append(current_message)
+
+        # Send all messages
+        for msg in messages_to_send:
+            await update.message.reply_text(msg, disable_web_page_preview=True)
 
     async def show_polymer_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
         """Show paginated menu of available polymers"""
