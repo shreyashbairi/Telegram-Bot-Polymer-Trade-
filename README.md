@@ -30,6 +30,7 @@ A comprehensive Telegram bot system that scrapes polymer price data from trading
 - **Price Statistics**: Calculate highest, lowest, mean, difference, and latest prices per day
 - **Smart Normalization**: Consistent polymer matching regardless of formatting variations
 - **Private Chat Only**: Bot only responds in private messages for security
+- **User Access Control**: Optional whitelist to restrict bot access to specific user IDs
 - **Message Link Tracking**: Every price entry linked to its source Telegram message
 
 ## 📋 Table of Contents
@@ -126,6 +127,10 @@ TELEGRAM_PHONE=+1234567890
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
 TELEGRAM_CHAT_IDS=-1001234567890
 
+# Bot Access Control (optional - comma-separated list of user IDs)
+# Leave empty to allow all users, or specify user IDs to restrict access
+ALLOWED_USER_IDS=123456789,987654321
+
 # OpenAI API Credentials
 OPENAI_API_KEY=sk-proj-...
 OPENAI_ORG_ID=org-...
@@ -148,6 +153,7 @@ The `.env` file is automatically ignored by git to protect your credentials. Nev
 | `TELEGRAM_PHONE` | Your phone number | `+971501234567` |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather | `123456:ABC...` |
 | `TELEGRAM_CHAT_IDS` | Group chat IDs (comma-separated) | `-1001234,-1002345` |
+| `ALLOWED_USER_IDS` | User IDs who can use bot (optional, comma-separated) | `123456789,987654321` |
 | `OPENAI_API_KEY` | OpenAI API key | `sk-proj-...` |
 | `OPENAI_ORG_ID` | OpenAI organization ID | `org-...` |
 | `DATABASE_PATH` | SQLite database file path | `polymer_prices.db` |
@@ -157,6 +163,18 @@ The `.env` file is automatically ignored by git to protect your credentials. Nev
 1. Add your bot to the target group
 2. Forward a message from the group to @userinfobot
 3. The bot will show you the chat ID (starts with `-100`)
+
+### Restricting Bot Access to Specific Users
+
+By default, the bot responds to all users who message it privately. To restrict access to specific users only:
+
+1. **Get User IDs**: Send a message from each authorized user to @userinfobot
+2. **Update .env**: Add the user IDs (comma-separated) to `ALLOWED_USER_IDS`
+   ```env
+   ALLOWED_USER_IDS=123456789,987654321,555666777
+   ```
+3. **Leave Empty for No Restrictions**: If `ALLOWED_USER_IDS` is empty or not set, the bot will respond to all users
+4. **Unauthorized User Experience**: Users not in the list will receive "Sorry, you are not authorized to use this bot." message
 
 ## 🚦 Quick Start
 
@@ -833,10 +851,12 @@ Telegram-Bot-Polymer-Trade-/
 - Session files are also ignored (contain authentication data)
 - Never share your `.env` file or commit it to version control
 
-### Bot Privacy
+### Bot Privacy & Access Control
 - Bot only responds in private chats (ignores group messages)
 - This prevents unauthorized users from accessing price data in public groups
-- Only users who directly message the bot can query prices
+- Optional user whitelist via `ALLOWED_USER_IDS` to restrict access to specific users
+- When enabled, unauthorized users receive rejection message
+- Leave `ALLOWED_USER_IDS` empty to allow all users
 
 ### Database Access
 - SQLite database is local (no external access)
