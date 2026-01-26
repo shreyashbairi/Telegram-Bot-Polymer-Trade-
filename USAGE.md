@@ -284,10 +284,21 @@ TELEGRAM_CHAT_IDS = ["-1001234567890"]  # Groups to scrape
    python main.py scrape --days 30
    ```
 
+   This will:
+   - Scrape 30 days of historical messages
+   - Create/update `last_scraped_message.json` with the latest message ID
+   - Exit after scraping completes
+
 2. **Production (24/7):**
    ```bash
    python main.py continuous --interval 4
    ```
+
+   This will:
+   - Do an initial incremental scrape from the last message ID
+   - Start the Telegram bot (responds to queries 24/7)
+   - Start the scheduled scraper (runs every 4 hours)
+   - Both services run concurrently until you stop with Ctrl+C
 
 3. **Manual Updates (if needed):**
    ```bash

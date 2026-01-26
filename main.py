@@ -77,8 +77,12 @@ async def run_continuous_system(scrape_interval_hours: int = 4):
 
     # Step 2: Start both bot and scheduled scraper concurrently
     print("Step 2: Starting continuous operation...")
-    print(f"Bot: Will respond to user queries 24/7")
-    print(f"Scraper: Will fetch new messages every {scrape_interval_hours} hours")
+    print(f"📱 Bot: Will respond to user queries 24/7")
+    print(f"🔄 Scraper: Will fetch new messages every {scrape_interval_hours} hours")
+    print()
+    print("=" * 60)
+    print("STARTING BOTH SERVICES...")
+    print("=" * 60)
     print()
 
     try:
