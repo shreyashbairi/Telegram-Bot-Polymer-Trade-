@@ -89,10 +89,15 @@ class PolymerScraper:
                 message_count = 0
                 processed_count = 0
                 total_scanned = 0
+                max_message_id = 0  # Track the latest message ID
 
                 # Iterate through messages from most recent
                 async for message in self.client.iter_messages(chat_id_int, limit=None):
                     total_scanned += 1
+
+                    # Track the highest message ID we've seen
+                    if message.id > max_message_id:
+                        max_message_id = message.id
 
                     # Stop if message is older than our cutoff date
                     if message.date < cutoff_date:
@@ -125,7 +130,8 @@ class PolymerScraper:
                                     status=polymer_data.get('status', 'PRICED'),
                                     date=message.date,
                                     message_text=message.text[:500],  # Store first 500 chars
-                                    message_link=message_link
+                                    message_link=message_link,
+                                    chat_id=chat_id
                                 )
 
                                 if success:
@@ -137,6 +143,10 @@ class PolymerScraper:
                     except Exception as e:
                         print(f"Error processing message {message.id}: {e}")
                         continue
+
+                # Save the latest message ID for future incremental scrapes
+                if max_message_id > 0:
+                    self._save_last_message_id(chat_id, max_message_id)
 
                 print(f"Scraping complete for chat {chat_id_int}")
                 print(f"Total messages scanned: {total_scanned}")
@@ -223,7 +233,8 @@ class PolymerScraper:
                                     status=polymer_data.get('status', 'PRICED'),
                                     date=message.date,
                                     message_text=message.text[:500],
-                                    message_link=message_link
+                                    message_link=message_link,
+                                    chat_id=chat_id
                                 )
 
                                 if success:
@@ -283,7 +294,8 @@ class PolymerScraper:
                             status=polymer_data.get('status', 'PRICED'),
                             date=event.message.date,
                             message_text=event.message.text[:500],
-                            message_link=message_link
+                            message_link=message_link,
+                            chat_id=str(event.chat_id)
                         )
                     print(f"Processed {len(polymers)} new polymer entries")
 
@@ -325,7 +337,8 @@ async def run_scheduled_scraper(interval_hours: int = 4):
 
     try:
         await scraper.start()
-        print(f"Scheduled scraper started. Will scrape every {interval_hours} hours.")
+        print(f"✅ Scheduled scraper is running! Will scrape every {interval_hours} hours.")
+        print()
 
         while True:
             try:
