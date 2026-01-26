@@ -24,14 +24,12 @@ class PolymerPriceBot:
     def build_application(self):
         """Build the telegram bot application"""
         self.app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
-
         # Add handlers - only respond to private chats
         self.app.add_handler(CommandHandler("start", self.start_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CommandHandler("help", self.help_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CommandHandler("list", self.list_polymers_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CommandHandler("search", self.search_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CommandHandler("daily", self.daily_command, filters=filters.ChatType.PRIVATE))
-        self.app.add_handler(CommandHandler("clear", self.clear_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CommandHandler("compare", self.compare_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CallbackQueryHandler(self.handle_polymer_selection))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, self.handle_text_query))
@@ -50,7 +48,6 @@ Commands:
 /search <name> - Search for specific polymers
 /daily [date] - View all polymers for a specific day
 /compare <polymer> [polymer] [date] - Compare polymer prices
-/clear - Clear chat and restart
 /help - Show detailed help
 
 You can also just type the polymer name (e.g., "J150", "Y130") to get its 7-day price history with message links.
@@ -79,7 +76,6 @@ Commands:
 /search <name> - Search for polymers (e.g., /search J150)
 /daily [date] - View all polymers for a day (e.g., /daily 23.01.26)
 /compare <polymer> [polymer] [date] - Compare prices
-/clear - Clear chat and restart bot
 /help - Show this help message
 
 Compare Examples:
@@ -219,14 +215,6 @@ The bot shows:
         for msg in messages_to_send:
             await update.message.reply_text(msg, disable_web_page_preview=True, parse_mode='HTML')
 
-    async def clear_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /clear command - simulates clearing chat and restarts"""
-        # Send empty lines to simulate clearing
-        clear_message = "\n" * 50 + "🔄 Chat cleared!\n"
-        await update.message.reply_text(clear_message)
-
-        # Execute start command
-        await self.start_command(update, context)
 
     async def compare_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /compare command with multiple modes, supporting parentheses for polymer names with spaces"""
