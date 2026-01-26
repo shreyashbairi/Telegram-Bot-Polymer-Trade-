@@ -130,7 +130,8 @@ class PolymerScraper:
                                     status=polymer_data.get('status', 'PRICED'),
                                     date=message.date,
                                     message_text=message.text[:500],  # Store first 500 chars
-                                    message_link=message_link
+                                    message_link=message_link,
+                                    chat_id=chat_id
                                 )
 
                                 if success:
@@ -232,7 +233,8 @@ class PolymerScraper:
                                     status=polymer_data.get('status', 'PRICED'),
                                     date=message.date,
                                     message_text=message.text[:500],
-                                    message_link=message_link
+                                    message_link=message_link,
+                                    chat_id=chat_id
                                 )
 
                                 if success:
@@ -292,7 +294,8 @@ class PolymerScraper:
                             status=polymer_data.get('status', 'PRICED'),
                             date=event.message.date,
                             message_text=event.message.text[:500],
-                            message_link=message_link
+                            message_link=message_link,
+                            chat_id=str(event.chat_id)
                         )
                     print(f"Processed {len(polymers)} new polymer entries")
 

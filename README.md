@@ -99,9 +99,13 @@ The system consists of four main components working together:
 
 - **Python 3.8 or higher**
 - **Telegram Account** with API credentials (get from https://my.telegram.org)
+  - Your personal account must be a member of all groups you want to scrape
+  - The scraper uses YOUR account credentials to read messages
 - **Telegram Bot Token** (create bot via @BotFather)
+  - The bot operates independently and only needs to respond to private messages
+  - The bot does NOT need to be added to the trading groups
 - **OpenAI API Key** (get from https://platform.openai.com)
-- **Access to polymer trading group** (must be a member)
+- **Access to polymer trading groups** (your account must be a member of each group)
 
 ## 🔧 Installation
 
@@ -490,6 +494,7 @@ CREATE TABLE polymer_prices (
     date DATE NOT NULL,                   -- Message timestamp (date only)
     message_text TEXT,                    -- First 500 chars of source message
     message_link TEXT,                    -- Telegram message link (t.me/...)
+    chat_id TEXT,                         -- Telegram group chat ID where message originated
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     -- Prevent duplicate entries for same polymer on same day from same message
@@ -500,6 +505,7 @@ CREATE TABLE polymer_prices (
 CREATE INDEX idx_polymer_name ON polymer_prices(normalized_name);
 CREATE INDEX idx_date ON polymer_prices(date);
 CREATE INDEX idx_polymer_date ON polymer_prices(normalized_name, date);
+CREATE INDEX idx_chat_id ON polymer_prices(chat_id);
 ```
 
 ### Tracking File: `last_scraped_message.json`
@@ -873,12 +879,39 @@ Telegram-Bot-Polymer-Trade-/
 
 ### Adding More Telegram Groups
 
+The system fully supports scraping from multiple Telegram groups simultaneously.
+
+**Configuration:**
+
 Edit `.env` and add multiple chat IDs (comma-separated):
 ```env
 TELEGRAM_CHAT_IDS=-1001234567890,-1002345678900,-1003456789000
 ```
 
-The scraper will fetch messages from all groups and store them together.
+**How it works:**
+
+1. **Scraper loops through all groups**: Each group is scraped independently
+2. **Per-group tracking**: `last_scraped_message.json` tracks the last message ID for each group separately
+3. **Group identification**: Each price entry in the database includes a `chat_id` column showing which group it came from
+4. **Historical scraping**: `python main.py scrape --days 7` scrapes all configured groups
+5. **Continuous mode**: `python main.py continuous --interval 4` scrapes all groups every 4 hours
+6. **Incremental updates**: Each group's messages are fetched starting from its last scraped message ID
+
+**Requirements:**
+
+- Your Telegram account (with API credentials) must be a member of all groups you want to scrape
+- The bot itself doesn't need to be in the groups (scraping uses your personal account, bot only handles queries)
+
+**Example tracking file:**
+```json
+{
+  "-1001234567890": 54321,
+  "-1002345678900": 98765,
+  "-1003456789012": 12345
+}
+```
+
+Each group maintains its own position, allowing efficient incremental scraping.
 
 ### Customizing Scraping Schedule
 

@@ -28,10 +28,20 @@ class PolymerDatabase:
                 date DATE NOT NULL,
                 message_text TEXT,
                 message_link TEXT,
+                chat_id TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(normalized_name, date, message_link)
             )
         ''')
+
+        # Migration: Add chat_id column if it doesn't exist
+        try:
+            cursor.execute("SELECT chat_id FROM polymer_prices LIMIT 1")
+        except sqlite3.OperationalError:
+            # Column doesn't exist, add it
+            print("Migrating database: Adding chat_id column...")
+            cursor.execute("ALTER TABLE polymer_prices ADD COLUMN chat_id TEXT")
+            print("Migration complete!")
 
         # Index for faster queries
         cursor.execute('''
@@ -42,6 +52,11 @@ class PolymerDatabase:
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_date
             ON polymer_prices(date)
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_chat_id
+            ON polymer_prices(chat_id)
         ''')
 
         conn.commit()
@@ -100,7 +115,7 @@ class PolymerDatabase:
 
     def insert_price(self, polymer_name: str, price: Optional[float],
                     status: str, date: datetime, message_text: str,
-                    message_link: str) -> bool:
+                    message_link: str, chat_id: str = None) -> bool:
         """Insert a polymer price record"""
         try:
             conn = sqlite3.connect(self.db_path)
@@ -110,10 +125,10 @@ class PolymerDatabase:
 
             cursor.execute('''
                 INSERT OR REPLACE INTO polymer_prices
-                (polymer_name, normalized_name, price, status, date, message_text, message_link)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (polymer_name, normalized_name, price, status, date, message_text, message_link, chat_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (polymer_name, normalized_name, price, status, date.date(),
-                  message_text, message_link))
+                  message_text, message_link, chat_id))
 
             conn.commit()
             conn.close()
@@ -132,7 +147,7 @@ class PolymerDatabase:
         start_date = end_date - timedelta(days=days)
 
         cursor.execute('''
-            SELECT polymer_name, price, status, date, message_text, message_link
+            SELECT polymer_name, price, status, date, message_text, message_link, chat_id
             FROM polymer_prices
             WHERE normalized_name = ?
             AND date BETWEEN ? AND ?
@@ -147,7 +162,8 @@ class PolymerDatabase:
                 'status': row[2],
                 'date': row[3],
                 'message_text': row[4],
-                'message_link': row[5]
+                'message_link': row[5],
+                'chat_id': row[6]
             })
 
         conn.close()
@@ -161,7 +177,7 @@ class PolymerDatabase:
         normalized_name = self.normalize_polymer_name(polymer_name)
 
         cursor.execute('''
-            SELECT polymer_name, price, status, date, message_text, message_link
+            SELECT polymer_name, price, status, date, message_text, message_link, chat_id
             FROM polymer_prices
             WHERE normalized_name = ?
             AND date = ?
@@ -179,7 +195,8 @@ class PolymerDatabase:
                 'status': row[2],
                 'date': row[3],
                 'message_text': row[4],
-                'message_link': row[5]
+                'message_link': row[5],
+                'chat_id': row[6]
             }
         return None
 
@@ -191,7 +208,7 @@ class PolymerDatabase:
         normalized_name = self.normalize_polymer_name(polymer_name)
 
         cursor.execute('''
-            SELECT polymer_name, price, status, date, message_text, message_link
+            SELECT polymer_name, price, status, date, message_text, message_link, chat_id
             FROM polymer_prices
             WHERE normalized_name = ?
             ORDER BY date DESC, created_at DESC
@@ -208,7 +225,8 @@ class PolymerDatabase:
                 'status': row[2],
                 'date': row[3],
                 'message_text': row[4],
-                'message_link': row[5]
+                'message_link': row[5],
+                'chat_id': row[6]
             }
         return None
 
@@ -220,7 +238,7 @@ class PolymerDatabase:
         normalized_name = self.normalize_polymer_name(polymer_name)
 
         cursor.execute('''
-            SELECT price, message_link
+            SELECT price, message_link, chat_id
             FROM polymer_prices
             WHERE normalized_name = ?
             AND date = ?
@@ -235,7 +253,8 @@ class PolymerDatabase:
         if row:
             return {
                 'price': row[0],
-                'link': row[1]
+                'link': row[1],
+                'chat_id': row[2]
             }
         return None
 
@@ -248,7 +267,7 @@ class PolymerDatabase:
 
         # Get all prices for this polymer on this date
         cursor.execute('''
-            SELECT price, message_link
+            SELECT price, message_link, chat_id
             FROM polymer_prices
             WHERE normalized_name = ?
             AND date = ?
@@ -268,15 +287,19 @@ class PolymerDatabase:
         lowest_price = min(prices)
         highest_price = max(prices)
 
-        # Get the message links for lowest and highest
+        # Get the message links and chat IDs for lowest and highest
         lowest_link = None
         highest_link = None
+        lowest_chat_id = None
+        highest_chat_id = None
 
         for row in rows:
             if row[0] == lowest_price and not lowest_link:
                 lowest_link = row[1]
+                lowest_chat_id = row[2]
             if row[0] == highest_price:
                 highest_link = row[1]
+                highest_chat_id = row[2]
 
         # Calculate mean as (highest + lowest) / 2
         mean_price = (highest_price + lowest_price) / 2
@@ -284,7 +307,7 @@ class PolymerDatabase:
 
         # Get latest price for this date
         cursor.execute('''
-            SELECT price, message_link
+            SELECT price, message_link, chat_id
             FROM polymer_prices
             WHERE normalized_name = ?
             AND date = ?
@@ -298,6 +321,7 @@ class PolymerDatabase:
 
         latest_price = latest_row[0] if latest_row else None
         latest_link = latest_row[1] if latest_row else None
+        latest_chat_id = latest_row[2] if latest_row else None
 
         return {
             'lowest': lowest_price,
@@ -306,8 +330,11 @@ class PolymerDatabase:
             'diff': diff,
             'lowest_link': lowest_link,
             'highest_link': highest_link,
+            'lowest_chat_id': lowest_chat_id,
+            'highest_chat_id': highest_chat_id,
             'latest_price': latest_price,
             'latest_link': latest_link,
+            'latest_chat_id': latest_chat_id,
             'count': len(prices)
         }
 
@@ -383,7 +410,7 @@ class PolymerDatabase:
         cursor = conn.cursor()
 
         cursor.execute('''
-            SELECT polymer_name, price, status, message_link, created_at
+            SELECT polymer_name, price, status, message_link, created_at, chat_id
             FROM polymer_prices
             WHERE date = ?
             AND price IS NOT NULL
@@ -397,7 +424,8 @@ class PolymerDatabase:
                 'price': row[1],
                 'status': row[2],
                 'message_link': row[3],
-                'created_at': row[4]
+                'created_at': row[4],
+                'chat_id': row[5]
             })
 
         conn.close()
