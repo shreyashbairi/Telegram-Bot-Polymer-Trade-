@@ -21,6 +21,18 @@ class PolymerPriceBot:
         self.db = PolymerDatabase()
         self.app = None
 
+    def is_user_authorized(self, user_id: int) -> bool:
+        """
+        Check if a user is authorized to use the bot
+        Returns True if user is authorized or if no restrictions are set
+        """
+        # If no allowed users configured, allow everyone
+        if not config.ALLOWED_USER_IDS:
+            return True
+
+        # Check if user is in the allowed list
+        return user_id in config.ALLOWED_USER_IDS
+
     def build_application(self):
         """Build the telegram bot application"""
         self.app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
@@ -40,6 +52,11 @@ class PolymerPriceBot:
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command"""
+        # Check authorization
+        if not self.is_user_authorized(update.effective_user.id):
+            await update.message.reply_text("Sorry, you are not authorized to use this bot.")
+            return
+
         welcome_message = """
 Welcome to the Polymer Price Bot! 🏭
 
@@ -62,6 +79,11 @@ You can also just type the polymer name (e.g., "J150", "Y130") to get its 7-day 
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /help command"""
+        # Check authorization
+        if not self.is_user_authorized(update.effective_user.id):
+            await update.message.reply_text("Sorry, you are not authorized to use this bot.")
+            return
+
         help_message = """
 Polymer Price Bot Help 📊
 
@@ -98,10 +120,20 @@ The bot shows:
 
     async def list_polymers_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /list command"""
+        # Check authorization
+        if not self.is_user_authorized(update.effective_user.id):
+            await update.message.reply_text("Sorry, you are not authorized to use this bot.")
+            return
+
         await self.show_polymer_menu(update, context)
 
     async def search_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /search command"""
+        # Check authorization
+        if not self.is_user_authorized(update.effective_user.id):
+            await update.message.reply_text("Sorry, you are not authorized to use this bot.")
+            return
+
         if not context.args:
             await update.message.reply_text(
                 "Please provide a search query.\n\n"
@@ -136,6 +168,11 @@ The bot shows:
 
     async def daily_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /daily [date] command"""
+        # Check authorization
+        if not self.is_user_authorized(update.effective_user.id):
+            await update.message.reply_text("Sorry, you are not authorized to use this bot.")
+            return
+
         target_date = None
 
         # Parse date if provided
@@ -221,6 +258,11 @@ The bot shows:
 
     async def clear_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /clear command - simulates clearing chat and restarts"""
+        # Check authorization
+        if not self.is_user_authorized(update.effective_user.id):
+            await update.message.reply_text("Sorry, you are not authorized to use this bot.")
+            return
+
         # Send empty lines to simulate clearing
         clear_message = "\n" * 50 + "🔄 Chat cleared!\n"
         await update.message.reply_text(clear_message)
@@ -230,6 +272,14 @@ The bot shows:
 
     async def compare_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /compare command with multiple modes, supporting parentheses for polymer names with spaces"""
+        # Check authorization
+        if not self.is_user_authorized(update.effective_user.id):
+            if update.message:
+                await update.message.reply_text("Sorry, you are not authorized to use this bot.")
+            elif update.callback_query:
+                await update.callback_query.answer("Sorry, you are not authorized to use this bot.")
+            return
+
         # Handle both message and callback query contexts
         if update.message:
             message_text = update.message.text
@@ -705,6 +755,12 @@ The bot shows:
     async def handle_polymer_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle polymer selection from inline keyboard"""
         query = update.callback_query
+
+        # Check authorization
+        if not self.is_user_authorized(update.effective_user.id):
+            await query.answer("Sorry, you are not authorized to use this bot.")
+            return
+
         await query.answer()
 
         callback_data = query.data
@@ -721,6 +777,11 @@ The bot shows:
 
     async def handle_text_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle direct text queries"""
+        # Check authorization
+        if not self.is_user_authorized(update.effective_user.id):
+            await update.message.reply_text("Sorry, you are not authorized to use this bot.")
+            return
+
         polymer_name = update.message.text.strip()
 
         # Try to find the polymer
