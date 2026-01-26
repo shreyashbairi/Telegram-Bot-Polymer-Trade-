@@ -89,10 +89,15 @@ class PolymerScraper:
                 message_count = 0
                 processed_count = 0
                 total_scanned = 0
+                max_message_id = 0  # Track the latest message ID
 
                 # Iterate through messages from most recent
                 async for message in self.client.iter_messages(chat_id_int, limit=None):
                     total_scanned += 1
+
+                    # Track the highest message ID we've seen
+                    if message.id > max_message_id:
+                        max_message_id = message.id
 
                     # Stop if message is older than our cutoff date
                     if message.date < cutoff_date:
@@ -137,6 +142,10 @@ class PolymerScraper:
                     except Exception as e:
                         print(f"Error processing message {message.id}: {e}")
                         continue
+
+                # Save the latest message ID for future incremental scrapes
+                if max_message_id > 0:
+                    self._save_last_message_id(chat_id, max_message_id)
 
                 print(f"Scraping complete for chat {chat_id_int}")
                 print(f"Total messages scanned: {total_scanned}")
@@ -325,7 +334,8 @@ async def run_scheduled_scraper(interval_hours: int = 4):
 
     try:
         await scraper.start()
-        print(f"Scheduled scraper started. Will scrape every {interval_hours} hours.")
+        print(f"✅ Scheduled scraper is running! Will scrape every {interval_hours} hours.")
+        print()
 
         while True:
             try:

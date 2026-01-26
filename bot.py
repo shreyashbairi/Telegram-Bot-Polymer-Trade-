@@ -809,7 +809,7 @@ The bot shows:
         await self.app.initialize()
         await self.app.start()
         await self.app.updater.start_polling()
-        print("Bot is running. Press Ctrl+C to stop.")
+        print("✅ Bot is running and ready to respond to user queries!")
 
         # Keep running
         try:
