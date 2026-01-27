@@ -2,6 +2,7 @@
 Telegram bot for handling user queries about polymer prices
 """
 import asyncio
+import hashlib
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -32,6 +33,32 @@ class PolymerPriceBot:
 
         # Check if user is in the allowed list
         return user_id in config.ALLOWED_USER_IDS
+
+    def get_polymer_callback_id(self, normalized_name: str, context: ContextTypes.DEFAULT_TYPE) -> str:
+        """
+        Generate a short callback ID for a polymer and store the mapping
+        Returns a short hash that fits in Telegram's 64-byte callback_data limit
+        """
+        # Create a short hash (8 characters is enough for uniqueness)
+        hash_obj = hashlib.md5(normalized_name.encode())
+        short_id = hash_obj.hexdigest()[:8]
+
+        # Store mapping in bot_data
+        if 'polymer_map' not in context.bot_data:
+            context.bot_data['polymer_map'] = {}
+
+        context.bot_data['polymer_map'][short_id] = normalized_name
+
+        return short_id
+
+    def get_polymer_name_from_callback(self, callback_id: str, context: ContextTypes.DEFAULT_TYPE) -> str:
+        """
+        Retrieve the polymer normalized name from callback ID
+        """
+        if 'polymer_map' not in context.bot_data:
+            return None
+
+        return context.bot_data['polymer_map'].get(callback_id)
 
     def build_application(self):
         """Build the telegram bot application"""
@@ -156,9 +183,11 @@ The bot shows:
         keyboard = []
         for polymer in results:
             button_text = f"{polymer['display_name']}"
+            # Use short callback ID to avoid 64-byte limit
+            callback_id = self.get_polymer_callback_id(polymer['normalized_name'], context)
             keyboard.append([InlineKeyboardButton(
                 button_text,
-                callback_data=f"polymer:{polymer['normalized_name']}"
+                callback_data=f"p:{callback_id}"
             )])
 
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -723,9 +752,11 @@ The bot shows:
         keyboard = []
         for polymer in page_polymers:
             button_text = f"{polymer['display_name']}"
+            # Use short callback ID to avoid 64-byte limit
+            callback_id = self.get_polymer_callback_id(polymer['normalized_name'], context)
             keyboard.append([InlineKeyboardButton(
                 button_text,
-                callback_data=f"polymer:{polymer['normalized_name']}"
+                callback_data=f"p:{callback_id}"
             )])
 
         # Add navigation buttons
@@ -770,8 +801,19 @@ The bot shows:
             page = int(callback_data.split(":")[1])
             await self.show_polymer_menu(update, context, page=page)
 
+        elif callback_data.startswith("p:"):
+            # Handle polymer selection (new short format)
+            callback_id = callback_data.split(":", 1)[1]
+            normalized_name = self.get_polymer_name_from_callback(callback_id, context)
+
+            if not normalized_name:
+                await query.answer("⚠️ Session expired. Please use /list again.", show_alert=True)
+                return
+
+            await self.send_polymer_price_history(query, normalized_name)
+
         elif callback_data.startswith("polymer:"):
-            # Handle polymer selection
+            # Handle polymer selection (legacy format for backward compatibility)
             normalized_name = callback_data.split(":", 1)[1]
             await self.send_polymer_price_history(query, normalized_name)
 
