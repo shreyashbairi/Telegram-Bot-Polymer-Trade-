@@ -30,4 +30,6 @@ OPENAI_ORG_ID = os.getenv('OPENAI_ORG_ID')
 DATABASE_PATH = os.getenv('DATABASE_PATH', 'polymer_prices.db')
 
 # Scraping Configuration
-DAYS_TO_SCRAPE = 30  # Scrape 1 month of data
+DATA_RETENTION_DAYS = 14  # Keep only 2 weeks of data
+DAYS_TO_SCRAPE = DATA_RETENTION_DAYS  # Initial scrape matches retention window
+SCRAPE_INTERVAL_HOURS = 4  # Scrape every 4 hours

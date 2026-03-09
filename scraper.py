@@ -1,5 +1,6 @@
 """
-Message scraper using Telethon to fetch historical messages from Telegram group
+Message scraper using Telethon to fetch historical messages from Telegram group.
+Designed to run independently alongside the bot process.
 """
 import asyncio
 import os
@@ -11,8 +12,12 @@ import config
 from database import PolymerDatabase
 from parser import PolymerParser
 
-# File to store the last scraped message ID for each chat
-LAST_MESSAGE_FILE = 'last_scraped_message.json'
+# Scraper state file - tracks last message IDs and scrape metadata
+SCRAPER_STATE_FILE = 'scraper_state.json'
+
+# Legacy file name (migrated automatically)
+LEGACY_STATE_FILE = 'last_scraped_message.json'
+
 
 class PolymerScraper:
     def __init__(self):
@@ -25,27 +30,103 @@ class PolymerScraper:
         self.db = PolymerDatabase()
         self.parser = PolymerParser()
 
-    def _load_last_message_ids(self) -> dict:
-        """Load the last scraped message IDs from file"""
-        if os.path.exists(LAST_MESSAGE_FILE):
+    # ------------------------------------------------------------------ #
+    #  State persistence (replaces old last_scraped_message.json)
+    # ------------------------------------------------------------------ #
+
+    def _load_state(self) -> dict:
+        """
+        Load scraper state from file.
+        Automatically migrates from the legacy format if needed.
+
+        State format:
+        {
+            "chats": {
+                "<chat_id>": {
+                    "last_message_id": 12345,
+                    "last_scrape_time": "2026-02-27T10:30:00"
+                }
+            },
+            "last_cleanup_time": "2026-02-27T10:30:00",
+            "data_retention_days": 14
+        }
+        """
+        # Try new state file first
+        if os.path.exists(SCRAPER_STATE_FILE):
             try:
-                with open(LAST_MESSAGE_FILE, 'r') as f:
+                with open(SCRAPER_STATE_FILE, 'r') as f:
                     return json.load(f)
             except Exception as e:
-                print(f"Error loading last message IDs: {e}")
-                return {}
-        return {}
+                print(f"Error loading scraper state: {e}")
+                return self._empty_state()
 
-    def _save_last_message_id(self, chat_id: str, message_id: int):
-        """Save the last scraped message ID for a chat"""
-        data = self._load_last_message_ids()
-        data[str(chat_id)] = message_id
+        # Migrate from legacy format
+        if os.path.exists(LEGACY_STATE_FILE):
+            try:
+                with open(LEGACY_STATE_FILE, 'r') as f:
+                    legacy = json.load(f)
+                # Convert flat {chat_id: msg_id} to new format
+                state = self._empty_state()
+                for chat_id, msg_id in legacy.items():
+                    state['chats'][str(chat_id)] = {
+                        'last_message_id': msg_id,
+                        'last_scrape_time': None
+                    }
+                self._save_state(state)
+                print(f"Migrated legacy state file to {SCRAPER_STATE_FILE}")
+                return state
+            except Exception as e:
+                print(f"Error migrating legacy state: {e}")
+
+        return self._empty_state()
+
+    def _empty_state(self) -> dict:
+        return {
+            'chats': {},
+            'last_cleanup_time': None,
+            'data_retention_days': config.DATA_RETENTION_DAYS
+        }
+
+    def _save_state(self, state: dict):
+        """Save full scraper state to file"""
         try:
-            with open(LAST_MESSAGE_FILE, 'w') as f:
-                json.dump(data, f, indent=2)
-            print(f"Saved last message ID {message_id} for chat {chat_id}")
+            with open(SCRAPER_STATE_FILE, 'w') as f:
+                json.dump(state, f, indent=2, default=str)
         except Exception as e:
-            print(f"Error saving last message ID: {e}")
+            print(f"Error saving scraper state: {e}")
+
+    def _update_chat_state(self, chat_id: str, message_id: int):
+        """Update the state for a single chat after scraping"""
+        state = self._load_state()
+        chat_key = str(chat_id)
+
+        if chat_key not in state['chats']:
+            state['chats'][chat_key] = {}
+
+        old_id = state['chats'][chat_key].get('last_message_id', 0)
+        if message_id > old_id:
+            state['chats'][chat_key]['last_message_id'] = message_id
+
+        state['chats'][chat_key]['last_scrape_time'] = datetime.now().isoformat()
+        self._save_state(state)
+        print(f"Saved state: chat {chat_id} -> message_id {message_id}")
+
+    def _get_last_message_id(self, chat_id: str) -> int:
+        """Get the last scraped message ID for a chat"""
+        state = self._load_state()
+        chat_data = state['chats'].get(str(chat_id), {})
+        return chat_data.get('last_message_id', 0)
+
+    def _record_cleanup(self):
+        """Record that a cleanup was performed"""
+        state = self._load_state()
+        state['last_cleanup_time'] = datetime.now().isoformat()
+        state['data_retention_days'] = config.DATA_RETENTION_DAYS
+        self._save_state(state)
+
+    # ------------------------------------------------------------------ #
+    #  Telegram client lifecycle
+    # ------------------------------------------------------------------ #
 
     async def start(self):
         """Start the Telegram client"""
@@ -57,175 +138,75 @@ class PolymerScraper:
         await self.client.disconnect()
         print("Scraper client stopped")
 
-    async def scrape_historical_data(self, days: int = 30):
+    # ------------------------------------------------------------------ #
+    #  Message link helper
+    # ------------------------------------------------------------------ #
+
+    async def _get_link_base(self, chat_id_int: int) -> str:
+        """Get the message link base URL for a chat"""
+        chat_entity = await self.client.get_entity(chat_id_int)
+        if hasattr(chat_entity, 'username') and chat_entity.username:
+            return f"https://t.me/{chat_entity.username}"
+        else:
+            chat_id_str = str(chat_id_int).replace('-100', '')
+            return f"https://t.me/c/{chat_id_str}"
+
+    # ------------------------------------------------------------------ #
+    #  Core scraping
+    # ------------------------------------------------------------------ #
+
+    async def scrape_historical_data(self, days: int = None):
         """
-        Scrape historical messages from the group
+        Scrape historical messages from all configured groups.
+        Used for initial data population.
         """
-        print(f"Starting to scrape {days} days of historical data...")
+        if days is None:
+            days = config.DATA_RETENTION_DAYS
+
+        print(f"Starting historical scrape ({days} days)...")
 
         for chat_id in config.TELEGRAM_CHAT_IDS:
+            chat_id_int = int(chat_id)
+            max_message_id = 0
+            message_count = 0
+            processed_count = 0
+            total_scanned = 0
+
             try:
-                chat_id_int = int(chat_id)
-                print(f"Scraping chat: {chat_id_int}")
+                print(f"\nScraping chat: {chat_id_int}")
 
-                # Get the chat entity to extract username for message links
-                chat_entity = await self.client.get_entity(chat_id_int)
-
-                # Determine the username/link base
-                if hasattr(chat_entity, 'username') and chat_entity.username:
-                    link_base = f"https://t.me/{chat_entity.username}"
-                else:
-                    # For private groups/channels without username, use chat ID
-                    # Format: https://t.me/c/{chat_id_without_-100}/{message_id}
-                    chat_id_str = str(chat_id_int).replace('-100', '')
-                    link_base = f"https://t.me/c/{chat_id_str}"
-
+                link_base = await self._get_link_base(chat_id_int)
                 print(f"Message link base: {link_base}")
 
-                # Calculate the cutoff date (timezone-aware to match Telegram message dates)
                 cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
 
-                # Fetch messages
-                message_count = 0
-                processed_count = 0
-                total_scanned = 0
-                max_message_id = 0  # Track the latest message ID
-
-                # Iterate through messages from most recent
                 async for message in self.client.iter_messages(chat_id_int, limit=None):
                     total_scanned += 1
 
-                    # Track the highest message ID we've seen
                     if message.id > max_message_id:
                         max_message_id = message.id
 
-                    # Stop if message is older than our cutoff date
                     if message.date < cutoff_date:
                         print(f"Reached messages older than {days} days, stopping...")
                         break
 
-                    # Only process text messages
                     if not message.text:
                         continue
 
                     message_count += 1
 
-                    # Skip very short messages (likely not price data)
                     if len(message.text) < 20:
                         continue
 
-                    # Parse the message
+                    # Skip messages already in the DB (avoids re-parsing + OpenAI cost)
+                    message_link = f"{link_base}/{message.id}"
+                    if self.db.message_link_exists(message_link):
+                        continue
+
                     try:
                         polymers = self.parser.parse_message(message.text)
 
                         if polymers:
-                            # Construct message link
-                            message_link = f"{link_base}/{message.id}"
-
-                            # Store each polymer price in the database
-                            for polymer_data in polymers:
-                                success = self.db.insert_price(
-                                    polymer_name=polymer_data['polymer_name'],
-                                    price=polymer_data.get('price'),
-                                    status=polymer_data.get('status', 'PRICED'),
-                                    date=message.date,
-                                    message_text=message.text[:500],  # Store first 500 chars
-                                    message_link=message_link,
-                                    chat_id=chat_id
-                                )
-
-                                if success:
-                                    processed_count += 1
-
-                            if message_count % 10 == 0:
-                                print(f"Scanned {total_scanned} messages, processed {message_count} text messages, found {processed_count} polymer entries...")
-
-                    except Exception as e:
-                        print(f"Error processing message {message.id}: {e}")
-                        continue
-
-                # Save the latest message ID for future incremental scrapes
-                if max_message_id > 0:
-                    self._save_last_message_id(chat_id, max_message_id)
-
-                print(f"Scraping complete for chat {chat_id_int}")
-                print(f"Total messages scanned: {total_scanned}")
-                print(f"Total text messages processed: {message_count}")
-                print(f"Total polymer entries stored: {processed_count}")
-
-            except Exception as e:
-                print(f"Error scraping chat {chat_id}: {e}")
-                import traceback
-                traceback.print_exc()
-                continue
-
-    async def scrape_new_messages(self):
-        """
-        Scrape only new messages since the last scrape
-        Uses saved message IDs to track progress
-        """
-        print("Starting incremental scrape for new messages...")
-
-        last_message_ids = self._load_last_message_ids()
-
-        for chat_id in config.TELEGRAM_CHAT_IDS:
-            try:
-                chat_id_int = int(chat_id)
-                last_scraped_id = last_message_ids.get(str(chat_id), 0)
-
-                print(f"Scraping chat: {chat_id_int}")
-                print(f"Last scraped message ID: {last_scraped_id}")
-
-                # Get the chat entity
-                chat_entity = await self.client.get_entity(chat_id_int)
-
-                # Determine the username/link base
-                if hasattr(chat_entity, 'username') and chat_entity.username:
-                    link_base = f"https://t.me/{chat_entity.username}"
-                else:
-                    chat_id_str = str(chat_id_int).replace('-100', '')
-                    link_base = f"https://t.me/c/{chat_id_str}"
-
-                print(f"Message link base: {link_base}")
-
-                # Fetch messages newer than last scraped ID
-                message_count = 0
-                processed_count = 0
-                total_scanned = 0
-                max_message_id = last_scraped_id
-
-                # Iterate through messages from most recent
-                # Use min_id to only get messages newer than last scraped
-                async for message in self.client.iter_messages(
-                    chat_id_int,
-                    limit=None,
-                    min_id=last_scraped_id
-                ):
-                    total_scanned += 1
-
-                    # Track the highest message ID we've seen
-                    if message.id > max_message_id:
-                        max_message_id = message.id
-
-                    # Only process text messages
-                    if not message.text:
-                        continue
-
-                    message_count += 1
-
-                    # Skip very short messages
-                    if len(message.text) < 20:
-                        continue
-
-                    # Parse the message
-                    try:
-                        polymers = self.parser.parse_message(message.text)
-
-                        if polymers:
-                            # Construct message link
-                            message_link = f"{link_base}/{message.id}"
-
-                            # Store each polymer price in the database
                             for polymer_data in polymers:
                                 success = self.db.insert_price(
                                     polymer_name=polymer_data['polymer_name'],
@@ -241,134 +222,226 @@ class PolymerScraper:
                                     processed_count += 1
 
                             if message_count % 10 == 0:
-                                print(f"Scanned {total_scanned} messages, processed {message_count} text messages, found {processed_count} polymer entries...")
+                                print(f"  Scanned {total_scanned}, processed {message_count} text, found {processed_count} entries...")
 
                     except Exception as e:
-                        print(f"Error processing message {message.id}: {e}")
+                        print(f"  Error processing message {message.id}: {e}")
                         continue
 
-                # Save the latest message ID for next scrape
-                if max_message_id > last_scraped_id:
-                    self._save_last_message_id(chat_id, max_message_id)
-
-                print(f"Incremental scrape complete for chat {chat_id_int}")
-                print(f"Total messages scanned: {total_scanned}")
-                print(f"Total text messages processed: {message_count}")
-                print(f"Total polymer entries stored: {processed_count}")
-                print(f"Last message ID: {max_message_id}")
-
             except Exception as e:
-                print(f"Error scraping chat {chat_id}: {e}")
+                print(f"Error scraping chat {chat_id} (partial): {e}")
                 import traceback
                 traceback.print_exc()
-                continue
+            finally:
+                # Always save progress — even after Telethon security errors
+                if max_message_id > 0:
+                    self._update_chat_state(chat_id, max_message_id)
+                print(f"Chat {chat_id_int} {'complete' if not max_message_id else 'saved'}: "
+                      f"scanned={total_scanned}, text={message_count}, entries={processed_count}")
 
-    async def monitor_new_messages(self):
+    async def scrape_new_messages(self):
         """
-        Monitor and process new messages in real-time
+        Incremental scrape: only fetch messages newer than the last recorded ID.
+        If no prior state exists for a chat, falls back to the retention window
+        so it doesn't accidentally crawl the entire chat history.
         """
-        print("Starting real-time message monitoring...")
+        print("Starting incremental scrape...")
 
-        @self.client.on(events.NewMessage(chats=[int(chat_id) for chat_id in config.TELEGRAM_CHAT_IDS]))
-        async def handle_new_message(event):
-            if not event.message.text:
-                return
+        # Date guard: never go further back than the retention window
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=config.DATA_RETENTION_DAYS)
+
+        for chat_id in config.TELEGRAM_CHAT_IDS:
+            chat_id_int = int(chat_id)
+            last_scraped_id = self._get_last_message_id(chat_id)
+            max_message_id = last_scraped_id
+            message_count = 0
+            processed_count = 0
+            total_scanned = 0
 
             try:
-                polymers = self.parser.parse_message(event.message.text)
+                if last_scraped_id == 0:
+                    print(f"\nScraping chat: {chat_id_int}  (no prior state — fetching last {config.DATA_RETENTION_DAYS} days)")
+                else:
+                    print(f"\nScraping chat: {chat_id_int}  (after message {last_scraped_id})")
 
-                if polymers:
-                    # Get chat entity to construct message link
-                    chat = await event.get_chat()
-                    if hasattr(chat, 'username') and chat.username:
-                        message_link = f"https://t.me/{chat.username}/{event.message.id}"
-                    else:
-                        # For private groups/channels
-                        chat_id_str = str(event.chat_id).replace('-100', '')
-                        message_link = f"https://t.me/c/{chat_id_str}/{event.message.id}"
+                link_base = await self._get_link_base(chat_id_int)
 
-                    for polymer_data in polymers:
-                        self.db.insert_price(
-                            polymer_name=polymer_data['polymer_name'],
-                            price=polymer_data.get('price'),
-                            status=polymer_data.get('status', 'PRICED'),
-                            date=event.message.date,
-                            message_text=event.message.text[:500],
-                            message_link=message_link,
-                            chat_id=str(event.chat_id)
-                        )
-                    print(f"Processed {len(polymers)} new polymer entries")
+                async for message in self.client.iter_messages(
+                    chat_id_int,
+                    limit=None,
+                    min_id=last_scraped_id
+                ):
+                    total_scanned += 1
+
+                    # Safety net: stop if we've gone past the retention window
+                    # (only matters when last_scraped_id == 0)
+                    if message.date < cutoff_date:
+                        print(f"  Reached retention boundary ({config.DATA_RETENTION_DAYS}d), stopping...")
+                        break
+
+                    if message.id > max_message_id:
+                        max_message_id = message.id
+
+                    if not message.text:
+                        continue
+
+                    message_count += 1
+
+                    if len(message.text) < 20:
+                        continue
+
+                    # Skip messages already in the DB (avoids re-parsing + OpenAI cost)
+                    message_link = f"{link_base}/{message.id}"
+                    if self.db.message_link_exists(message_link):
+                        continue
+
+                    try:
+                        polymers = self.parser.parse_message(message.text)
+
+                        if polymers:
+                            for polymer_data in polymers:
+                                success = self.db.insert_price(
+                                    polymer_name=polymer_data['polymer_name'],
+                                    price=polymer_data.get('price'),
+                                    status=polymer_data.get('status', 'PRICED'),
+                                    date=message.date,
+                                    message_text=message.text[:500],
+                                    message_link=message_link,
+                                    chat_id=chat_id
+                                )
+
+                                if success:
+                                    processed_count += 1
+
+                            if message_count % 10 == 0:
+                                print(f"  Scanned {total_scanned}, processed {message_count} text, found {processed_count} entries...")
+
+                    except Exception as e:
+                        print(f"  Error processing message {message.id}: {e}")
+                        continue
 
             except Exception as e:
-                print(f"Error processing new message: {e}")
+                print(f"Error scraping chat {chat_id} (partial): {e}")
+                import traceback
+                traceback.print_exc()
+            finally:
+                # Always save progress — even after Telethon security errors
+                if max_message_id > last_scraped_id:
+                    self._update_chat_state(chat_id, max_message_id)
+                print(f"Chat {chat_id_int} {'complete' if not total_scanned else 'saved'}: "
+                      f"scanned={total_scanned}, text={message_count}, entries={processed_count}, last_id={max_message_id}")
 
-        # Keep the client running
-        await self.client.run_until_disconnected()
+    def cleanup_old_data(self):
+        """Delete database records older than the retention window"""
+        retention = config.DATA_RETENTION_DAYS
+        print(f"Cleaning up data older than {retention} days...")
+        deleted = self.db.delete_old_data(retention_days=retention)
+        self._record_cleanup()
+        return deleted
 
+    # ------------------------------------------------------------------ #
+    #  Scheduled loop (runs independently or alongside the bot)
+    # ------------------------------------------------------------------ #
 
-async def run_scraper(days: int = 30):
-    """Run the scraper as a standalone process"""
-    scraper = PolymerScraper()
+    async def run_loop(self, interval_hours: int = None):
+        """
+        Run the scraper on a repeating schedule.
+        Each cycle: incremental scrape + delete old data.
+        Designed to run forever (until Ctrl-C or process kill).
+        """
+        if interval_hours is None:
+            interval_hours = config.SCRAPE_INTERVAL_HOURS
 
-    try:
-        await scraper.start()
-        await scraper.scrape_historical_data(days=days)
-    finally:
-        await scraper.stop()
+        print(f"Scheduled scraper starting (every {interval_hours}h, retention {config.DATA_RETENTION_DAYS}d)")
 
-
-async def run_incremental_scraper():
-    """Run incremental scraper (only new messages)"""
-    scraper = PolymerScraper()
-
-    try:
-        await scraper.start()
-        await scraper.scrape_new_messages()
-    finally:
-        await scraper.stop()
-
-
-async def run_scheduled_scraper(interval_hours: int = 4):
-    """
-    Run the scraper on a schedule
-    Scrapes new messages every N hours
-    """
-    scraper = PolymerScraper()
-
-    try:
-        await scraper.start()
-        print(f"✅ Scheduled scraper is running! Will scrape every {interval_hours} hours.")
+        # Print current state
+        state = self._load_state()
+        for cid, cdata in state.get('chats', {}).items():
+            print(f"  Chat {cid}: last_message_id={cdata.get('last_message_id', 0)}, "
+                  f"last_scrape={cdata.get('last_scrape_time', 'never')}")
         print()
 
         while True:
             try:
+                now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 print(f"\n{'='*60}")
-                print(f"Starting scheduled scrape at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"Scrape cycle starting at {now}")
                 print(f"{'='*60}\n")
 
-                await scraper.scrape_new_messages()
+                # Step 1: Scrape new messages
+                await self.scrape_new_messages()
 
-                print(f"\n{'='*60}")
-                print(f"Scrape complete. Next scrape in {interval_hours} hours.")
-                print(f"Next run at: {(datetime.now() + timedelta(hours=interval_hours)).strftime('%Y-%m-%d %H:%M:%S')}")
+                # Step 2: Delete data older than 2 weeks
+                self.cleanup_old_data()
+
+                # Step 3: Print DB status
+                date_range = self.db.get_data_date_range()
+                if date_range:
+                    print(f"\nDB status: {date_range['total_records']} records, "
+                          f"{date_range['oldest_date']} to {date_range['newest_date']}")
+
+                next_run = (datetime.now() + timedelta(hours=interval_hours)).strftime('%Y-%m-%d %H:%M:%S')
+                print(f"\nNext scrape at: {next_run}")
                 print(f"{'='*60}\n")
 
-                # Wait for the specified interval
                 await asyncio.sleep(interval_hours * 3600)
 
+            except asyncio.CancelledError:
+                print("Scraper loop cancelled")
+                break
             except Exception as e:
-                print(f"Error during scheduled scrape: {e}")
+                print(f"Error during scrape cycle: {e}")
                 import traceback
                 traceback.print_exc()
                 print(f"Will retry in {interval_hours} hours...")
                 await asyncio.sleep(interval_hours * 3600)
 
+
+# ------------------------------------------------------------------ #
+#  Standalone entry points
+# ------------------------------------------------------------------ #
+
+async def run_scraper(days: int = None):
+    """One-time historical scrape"""
+    if days is None:
+        days = config.DATA_RETENTION_DAYS
+    scraper = PolymerScraper()
+    try:
+        await scraper.start()
+        await scraper.scrape_historical_data(days=days)
+        scraper.cleanup_old_data()
+    finally:
+        await scraper.stop()
+
+
+async def run_incremental_scraper():
+    """One-time incremental scrape + cleanup"""
+    scraper = PolymerScraper()
+    try:
+        await scraper.start()
+        await scraper.scrape_new_messages()
+        scraper.cleanup_old_data()
+    finally:
+        await scraper.stop()
+
+
+async def run_scraper_loop(interval_hours: int = None):
+    """
+    Standalone scraper loop process.
+    Keeps the Telethon client alive and scrapes on schedule.
+    Can be run in its own terminal / process alongside the bot.
+    """
+    if interval_hours is None:
+        interval_hours = config.SCRAPE_INTERVAL_HOURS
+    scraper = PolymerScraper()
+    try:
+        await scraper.start()
+        await scraper.run_loop(interval_hours=interval_hours)
     except KeyboardInterrupt:
-        print("\nScheduled scraper stopped by user.")
+        print("\nScraper loop stopped by user.")
     finally:
         await scraper.stop()
 
 
 if __name__ == "__main__":
-    # Run the scraper
-    asyncio.run(run_scraper(days=config.DAYS_TO_SCRAPE))
+    asyncio.run(run_scraper_loop())

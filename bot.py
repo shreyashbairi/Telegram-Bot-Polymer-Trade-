@@ -70,6 +70,7 @@ class PolymerPriceBot:
         self.app.add_handler(CommandHandler("search", self.search_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CommandHandler("daily", self.daily_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CommandHandler("compare", self.compare_command, filters=filters.ChatType.PRIVATE))
+        self.app.add_handler(CommandHandler("clear", self.clear_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CallbackQueryHandler(self.handle_polymer_selection))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, self.handle_text_query))
 
