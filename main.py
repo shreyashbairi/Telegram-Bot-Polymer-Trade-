@@ -23,6 +23,7 @@ import sys
 
 from scraper import run_scraper, run_incremental_scraper, run_scraper_loop
 from bot import run_bot
+from database import PolymerDatabase
 import config
 
 

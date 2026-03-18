@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import NetworkError, TimedOut, RetryAfter
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -916,20 +917,72 @@ The bot shows:
             await update_or_query.message.reply_text(message, disable_web_page_preview=True, parse_mode='HTML')
 
     async def run(self):
-        """Run the bot"""
-        print("Starting Polymer Price Bot...")
-        await self.app.initialize()
-        await self.app.start()
-        await self.app.updater.start_polling()
-        print("✅ Bot is running and ready to respond to user queries!")
+        """Run the bot with automatic reconnection on network errors"""
+        max_retries = 5
+        retry_count = 0
+        base_delay = 2
 
-        # Keep running
-        try:
-            await asyncio.Event().wait()
-        finally:
-            await self.app.updater.stop()
-            await self.app.stop()
-            await self.app.shutdown()
+        while True:
+            try:
+                print("Starting Polymer Price Bot...")
+                await self.app.initialize()
+                await self.app.start()
+                await self.app.updater.start_polling(
+                    drop_pending_updates=True,
+                    allowed_updates=Update.ALL_TYPES,
+                )
+                print("Bot is running and ready to respond to user queries!")
+
+                retry_count = 0  # Reset on successful start
+
+                # Keep running
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    try:
+                        await self.app.updater.stop()
+                        await self.app.stop()
+                        await self.app.shutdown()
+                    except Exception as e:
+                        print(f"Error during bot shutdown: {e}")
+
+                break  # Clean exit
+
+            except (NetworkError, TimedOut, OSError, ConnectionError) as e:
+                retry_count += 1
+                delay = base_delay * (2 ** (retry_count - 1))
+                print(f"Bot network error: {e}")
+
+                if retry_count > max_retries:
+                    print(f"Max retries ({max_retries}) exceeded. Restarting retry counter after longer pause...")
+                    retry_count = 0
+                    delay = 60  # Longer pause before restarting
+
+                print(f"Reconnecting bot in {delay}s (attempt {retry_count}/{max_retries})...")
+                # Ensure clean shutdown before retry
+                try:
+                    await self.app.updater.stop()
+                    await self.app.stop()
+                    await self.app.shutdown()
+                except Exception:
+                    pass
+
+                await asyncio.sleep(delay)
+
+                # Rebuild the application for a fresh connection
+                self.build_application()
+
+            except RetryAfter as e:
+                print(f"Telegram rate limit hit. Retrying after {e.retry_after}s...")
+                try:
+                    await self.app.updater.stop()
+                    await self.app.stop()
+                    await self.app.shutdown()
+                except Exception:
+                    pass
+
+                await asyncio.sleep(e.retry_after)
+                self.build_application()
 
 
 async def run_bot():

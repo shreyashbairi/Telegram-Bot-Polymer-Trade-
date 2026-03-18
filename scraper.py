@@ -6,7 +6,7 @@ import asyncio
 import os
 import json
 from datetime import datetime, timedelta, timezone
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, errors
 from telethon.tl.types import Message
 import config
 from database import PolymerDatabase
@@ -17,6 +17,11 @@ SCRAPER_STATE_FILE = 'scraper_state.json'
 
 # Legacy file name (migrated automatically)
 LEGACY_STATE_FILE = 'last_scraped_message.json'
+
+
+# Reconnection settings
+MAX_RECONNECT_ATTEMPTS = 5
+RECONNECT_BASE_DELAY = 2  # seconds
 
 
 class PolymerScraper:
@@ -128,6 +133,39 @@ class PolymerScraper:
     #  Telegram client lifecycle
     # ------------------------------------------------------------------ #
 
+    async def _ensure_connected(self):
+        """Ensure the Telethon client is connected, reconnecting if necessary."""
+        for attempt in range(1, MAX_RECONNECT_ATTEMPTS + 1):
+            try:
+                if self.client.is_connected():
+                    # Verify the connection actually works with a lightweight call
+                    try:
+                        await self.client.get_me()
+                        return True
+                    except Exception:
+                        print("Client reports connected but call failed, reconnecting...")
+                        try:
+                            await self.client.disconnect()
+                        except Exception:
+                            pass
+
+                print(f"Client disconnected — attempting to reconnect (attempt {attempt}/{MAX_RECONNECT_ATTEMPTS})...")
+                await self.client.connect()
+                if not await self.client.is_user_authorized():
+                    await self.client.start(phone=config.TELEGRAM_PHONE)
+                print(f"Reconnected successfully on attempt {attempt}")
+                return True
+
+            except Exception as e:
+                delay = RECONNECT_BASE_DELAY * (2 ** (attempt - 1))
+                print(f"Reconnection attempt {attempt} failed: {e}")
+                if attempt < MAX_RECONNECT_ATTEMPTS:
+                    print(f"Retrying in {delay}s...")
+                    await asyncio.sleep(delay)
+
+        print("All reconnection attempts exhausted.")
+        return False
+
     async def start(self):
         """Start the Telegram client"""
         await self.client.start(phone=config.TELEGRAM_PHONE)
@@ -135,7 +173,11 @@ class PolymerScraper:
 
     async def stop(self):
         """Stop the Telegram client"""
-        await self.client.disconnect()
+        try:
+            if self.client.is_connected():
+                await self.client.disconnect()
+        except Exception:
+            pass
         print("Scraper client stopped")
 
     # ------------------------------------------------------------------ #
@@ -193,6 +235,7 @@ class PolymerScraper:
                     if not message.text:
                         continue
 
+                if message.text:
                     message_count += 1
 
                     if len(message.text) < 20:
@@ -285,6 +328,7 @@ class PolymerScraper:
                     if not message.text:
                         continue
 
+                if message.text:
                     message_count += 1
 
                     if len(message.text) < 20:

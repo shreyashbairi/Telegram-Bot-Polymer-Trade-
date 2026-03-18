@@ -168,6 +168,30 @@ class PolymerDatabase:
             print(f"Error inserting price: {e}")
             return False
 
+    def delete_old_data(self, days: int = 14) -> int:
+        """Delete database records older than the specified number of days.
+        Returns the number of rows deleted."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            cutoff_date = (datetime.now() - timedelta(days=days)).date()
+
+            cursor.execute(
+                'DELETE FROM polymer_prices WHERE date < ?',
+                (cutoff_date.isoformat(),)
+            )
+
+            deleted = cursor.rowcount
+            conn.commit()
+            conn.close()
+
+            print(f"Purged {deleted} database records older than {days} days (before {cutoff_date})")
+            return deleted
+        except Exception as e:
+            print(f"Error purging old data: {e}")
+            return 0
+
     def get_polymer_history(self, polymer_name: str, days: int = 7) -> List[Dict]:
         """Get price history for a polymer for the last N days"""
         conn = self._connect()
