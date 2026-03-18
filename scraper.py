@@ -5,7 +5,7 @@ import asyncio
 import os
 import json
 from datetime import datetime, timedelta, timezone
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, errors
 from telethon.tl.types import Message
 import config
 from database import PolymerDatabase
@@ -13,6 +13,11 @@ from parser import PolymerParser
 
 # File to store the last scraped message ID for each chat
 LAST_MESSAGE_FILE = 'last_scraped_message.json'
+
+# Reconnection settings
+MAX_RECONNECT_ATTEMPTS = 5
+RECONNECT_BASE_DELAY = 2  # seconds
+
 
 class PolymerScraper:
     def __init__(self):
@@ -47,6 +52,39 @@ class PolymerScraper:
         except Exception as e:
             print(f"Error saving last message ID: {e}")
 
+    async def _ensure_connected(self):
+        """Ensure the Telethon client is connected, reconnecting if necessary."""
+        for attempt in range(1, MAX_RECONNECT_ATTEMPTS + 1):
+            try:
+                if self.client.is_connected():
+                    # Verify the connection actually works with a lightweight call
+                    try:
+                        await self.client.get_me()
+                        return True
+                    except Exception:
+                        print("Client reports connected but call failed, reconnecting...")
+                        try:
+                            await self.client.disconnect()
+                        except Exception:
+                            pass
+
+                print(f"Client disconnected — attempting to reconnect (attempt {attempt}/{MAX_RECONNECT_ATTEMPTS})...")
+                await self.client.connect()
+                if not await self.client.is_user_authorized():
+                    await self.client.start(phone=config.TELEGRAM_PHONE)
+                print(f"Reconnected successfully on attempt {attempt}")
+                return True
+
+            except Exception as e:
+                delay = RECONNECT_BASE_DELAY * (2 ** (attempt - 1))
+                print(f"Reconnection attempt {attempt} failed: {e}")
+                if attempt < MAX_RECONNECT_ATTEMPTS:
+                    print(f"Retrying in {delay}s...")
+                    await asyncio.sleep(delay)
+
+        print("All reconnection attempts exhausted.")
+        return False
+
     async def start(self):
         """Start the Telegram client"""
         await self.client.start(phone=config.TELEGRAM_PHONE)
@@ -54,214 +92,204 @@ class PolymerScraper:
 
     async def stop(self):
         """Stop the Telegram client"""
-        await self.client.disconnect()
+        try:
+            if self.client.is_connected():
+                await self.client.disconnect()
+        except Exception:
+            pass
         print("Scraper client stopped")
+
+    async def _process_message(self, message, link_base: str, chat_id: str) -> int:
+        """Process a single message. Returns the number of polymer entries stored."""
+        if not message.text or len(message.text) < 20:
+            return 0
+
+        try:
+            polymers = self.parser.parse_message(message.text)
+            if not polymers:
+                return 0
+
+            message_link = f"{link_base}/{message.id}"
+            stored = 0
+            for polymer_data in polymers:
+                success = self.db.insert_price(
+                    polymer_name=polymer_data['polymer_name'],
+                    price=polymer_data.get('price'),
+                    status=polymer_data.get('status', 'PRICED'),
+                    date=message.date,
+                    message_text=message.text[:500],
+                    message_link=message_link,
+                    chat_id=chat_id
+                )
+                if success:
+                    stored += 1
+            return stored
+        except Exception as e:
+            print(f"Error processing message {message.id}: {e}")
+            return 0
+
+    async def _get_link_base(self, chat_id_int: int) -> str:
+        """Get the message link base for a chat."""
+        chat_entity = await self.client.get_entity(chat_id_int)
+        if hasattr(chat_entity, 'username') and chat_entity.username:
+            return f"https://t.me/{chat_entity.username}"
+        else:
+            chat_id_str = str(chat_id_int).replace('-100', '')
+            return f"https://t.me/c/{chat_id_str}"
 
     async def scrape_historical_data(self, days: int = 30):
         """
-        Scrape historical messages from the group
+        Scrape historical messages from the group with reconnection support
         """
         print(f"Starting to scrape {days} days of historical data...")
 
         for chat_id in config.TELEGRAM_CHAT_IDS:
-            try:
-                chat_id_int = int(chat_id)
-                print(f"Scraping chat: {chat_id_int}")
+            await self._scrape_chat_historical(chat_id, days)
 
-                # Get the chat entity to extract username for message links
-                chat_entity = await self.client.get_entity(chat_id_int)
+    async def _scrape_chat_historical(self, chat_id: str, days: int, retry_count: int = 0):
+        """Scrape a single chat historically with retry on disconnection."""
+        max_retries = 3
+        try:
+            chat_id_int = int(chat_id)
+            print(f"Scraping chat: {chat_id_int}")
 
-                # Determine the username/link base
-                if hasattr(chat_entity, 'username') and chat_entity.username:
-                    link_base = f"https://t.me/{chat_entity.username}"
-                else:
-                    # For private groups/channels without username, use chat ID
-                    # Format: https://t.me/c/{chat_id_without_-100}/{message_id}
-                    chat_id_str = str(chat_id_int).replace('-100', '')
-                    link_base = f"https://t.me/c/{chat_id_str}"
+            if not await self._ensure_connected():
+                print(f"Cannot connect to scrape chat {chat_id}. Skipping.")
+                return
 
-                print(f"Message link base: {link_base}")
+            link_base = await self._get_link_base(chat_id_int)
+            print(f"Message link base: {link_base}")
 
-                # Calculate the cutoff date (timezone-aware to match Telegram message dates)
-                cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
 
-                # Fetch messages
-                message_count = 0
-                processed_count = 0
-                total_scanned = 0
-                max_message_id = 0  # Track the latest message ID
+            message_count = 0
+            processed_count = 0
+            total_scanned = 0
+            max_message_id = 0
 
-                # Iterate through messages from most recent
-                async for message in self.client.iter_messages(chat_id_int, limit=None):
-                    total_scanned += 1
+            async for message in self.client.iter_messages(chat_id_int, limit=None):
+                total_scanned += 1
 
-                    # Track the highest message ID we've seen
-                    if message.id > max_message_id:
-                        max_message_id = message.id
+                if message.id > max_message_id:
+                    max_message_id = message.id
 
-                    # Stop if message is older than our cutoff date
-                    if message.date < cutoff_date:
-                        print(f"Reached messages older than {days} days, stopping...")
-                        break
+                if message.date < cutoff_date:
+                    print(f"Reached messages older than {days} days, stopping...")
+                    break
 
-                    # Only process text messages
-                    if not message.text:
-                        continue
-
+                if message.text:
                     message_count += 1
 
-                    # Skip very short messages (likely not price data)
-                    if len(message.text) < 20:
-                        continue
+                stored = await self._process_message(message, link_base, chat_id)
+                processed_count += stored
 
-                    # Parse the message
-                    try:
-                        polymers = self.parser.parse_message(message.text)
+                if message_count > 0 and message_count % 10 == 0:
+                    print(f"Scanned {total_scanned} messages, processed {message_count} text messages, found {processed_count} polymer entries...")
 
-                        if polymers:
-                            # Construct message link
-                            message_link = f"{link_base}/{message.id}"
+            if max_message_id > 0:
+                self._save_last_message_id(chat_id, max_message_id)
 
-                            # Store each polymer price in the database
-                            for polymer_data in polymers:
-                                success = self.db.insert_price(
-                                    polymer_name=polymer_data['polymer_name'],
-                                    price=polymer_data.get('price'),
-                                    status=polymer_data.get('status', 'PRICED'),
-                                    date=message.date,
-                                    message_text=message.text[:500],  # Store first 500 chars
-                                    message_link=message_link,
-                                    chat_id=chat_id
-                                )
+            print(f"Scraping complete for chat {chat_id_int}")
+            print(f"Total messages scanned: {total_scanned}")
+            print(f"Total text messages processed: {message_count}")
+            print(f"Total polymer entries stored: {processed_count}")
 
-                                if success:
-                                    processed_count += 1
+        except (ConnectionError, errors.RPCError, OSError, RuntimeError, AttributeError) as e:
+            error_msg = str(e)
+            print(f"Connection lost while scraping chat {chat_id}: {error_msg}")
 
-                            if message_count % 10 == 0:
-                                print(f"Scanned {total_scanned} messages, processed {message_count} text messages, found {processed_count} polymer entries...")
+            if retry_count < max_retries:
+                print(f"Will attempt reconnection for chat {chat_id} (retry {retry_count + 1}/{max_retries})...")
+                delay = RECONNECT_BASE_DELAY * (2 ** retry_count)
+                await asyncio.sleep(delay)
 
-                    except Exception as e:
-                        print(f"Error processing message {message.id}: {e}")
-                        continue
+                if await self._ensure_connected():
+                    await self._scrape_chat_historical(chat_id, days, retry_count + 1)
+                else:
+                    print(f"Could not reconnect. Skipping chat {chat_id}.")
+            else:
+                print(f"Max retries reached for chat {chat_id}. Skipping.")
 
-                # Save the latest message ID for future incremental scrapes
-                if max_message_id > 0:
-                    self._save_last_message_id(chat_id, max_message_id)
-
-                print(f"Scraping complete for chat {chat_id_int}")
-                print(f"Total messages scanned: {total_scanned}")
-                print(f"Total text messages processed: {message_count}")
-                print(f"Total polymer entries stored: {processed_count}")
-
-            except Exception as e:
-                print(f"Error scraping chat {chat_id}: {e}")
-                import traceback
-                traceback.print_exc()
-                continue
+        except Exception as e:
+            print(f"Error scraping chat {chat_id}: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def scrape_new_messages(self):
         """
-        Scrape only new messages since the last scrape
-        Uses saved message IDs to track progress
+        Scrape only new messages since the last scrape with reconnection support
         """
-        print("Starting incremental scrape for new messages...")
+        print("Starting incremental scrape...")
 
         last_message_ids = self._load_last_message_ids()
 
         for chat_id in config.TELEGRAM_CHAT_IDS:
-            try:
-                chat_id_int = int(chat_id)
-                last_scraped_id = last_message_ids.get(str(chat_id), 0)
+            last_scraped_id = last_message_ids.get(str(chat_id), 0)
+            await self._scrape_chat_incremental(chat_id, last_scraped_id)
 
-                print(f"Scraping chat: {chat_id_int}")
-                print(f"Last scraped message ID: {last_scraped_id}")
+    async def _scrape_chat_incremental(self, chat_id: str, last_scraped_id: int, retry_count: int = 0):
+        """Scrape a single chat incrementally with retry on disconnection."""
+        max_retries = 3
+        try:
+            chat_id_int = int(chat_id)
+            print(f"Scraping chat: {chat_id_int}  (after message {last_scraped_id})")
 
-                # Get the chat entity
-                chat_entity = await self.client.get_entity(chat_id_int)
+            if not await self._ensure_connected():
+                print(f"Cannot connect to scrape chat {chat_id}. Skipping.")
+                return
 
-                # Determine the username/link base
-                if hasattr(chat_entity, 'username') and chat_entity.username:
-                    link_base = f"https://t.me/{chat_entity.username}"
-                else:
-                    chat_id_str = str(chat_id_int).replace('-100', '')
-                    link_base = f"https://t.me/c/{chat_id_str}"
+            link_base = await self._get_link_base(chat_id_int)
+            print(f"Message link base: {link_base}")
 
-                print(f"Message link base: {link_base}")
+            message_count = 0
+            processed_count = 0
+            total_scanned = 0
+            max_message_id = last_scraped_id
 
-                # Fetch messages newer than last scraped ID
-                message_count = 0
-                processed_count = 0
-                total_scanned = 0
-                max_message_id = last_scraped_id
+            async for message in self.client.iter_messages(
+                chat_id_int,
+                limit=None,
+                min_id=last_scraped_id
+            ):
+                total_scanned += 1
 
-                # Iterate through messages from most recent
-                # Use min_id to only get messages newer than last scraped
-                async for message in self.client.iter_messages(
-                    chat_id_int,
-                    limit=None,
-                    min_id=last_scraped_id
-                ):
-                    total_scanned += 1
+                if message.id > max_message_id:
+                    max_message_id = message.id
 
-                    # Track the highest message ID we've seen
-                    if message.id > max_message_id:
-                        max_message_id = message.id
-
-                    # Only process text messages
-                    if not message.text:
-                        continue
-
+                if message.text:
                     message_count += 1
 
-                    # Skip very short messages
-                    if len(message.text) < 20:
-                        continue
+                stored = await self._process_message(message, link_base, chat_id)
+                processed_count += stored
 
-                    # Parse the message
-                    try:
-                        polymers = self.parser.parse_message(message.text)
+                if message_count > 0 and message_count % 10 == 0:
+                    print(f"Scanned {total_scanned} messages, processed {message_count} text messages, found {processed_count} polymer entries...")
 
-                        if polymers:
-                            # Construct message link
-                            message_link = f"{link_base}/{message.id}"
+            if max_message_id > last_scraped_id:
+                self._save_last_message_id(chat_id, max_message_id)
 
-                            # Store each polymer price in the database
-                            for polymer_data in polymers:
-                                success = self.db.insert_price(
-                                    polymer_name=polymer_data['polymer_name'],
-                                    price=polymer_data.get('price'),
-                                    status=polymer_data.get('status', 'PRICED'),
-                                    date=message.date,
-                                    message_text=message.text[:500],
-                                    message_link=message_link,
-                                    chat_id=chat_id
-                                )
+            print(f"Chat {chat_id_int} complete: scanned={total_scanned}, text={message_count}, entries={processed_count}, last_id={max_message_id}")
 
-                                if success:
-                                    processed_count += 1
+        except (ConnectionError, errors.RPCError, OSError, RuntimeError, AttributeError) as e:
+            error_msg = str(e)
+            print(f"Connection lost while scraping chat {chat_id}: {error_msg}")
 
-                            if message_count % 10 == 0:
-                                print(f"Scanned {total_scanned} messages, processed {message_count} text messages, found {processed_count} polymer entries...")
+            if retry_count < max_retries:
+                print(f"Will attempt reconnection for chat {chat_id} (retry {retry_count + 1}/{max_retries})...")
+                delay = RECONNECT_BASE_DELAY * (2 ** retry_count)
+                await asyncio.sleep(delay)
 
-                    except Exception as e:
-                        print(f"Error processing message {message.id}: {e}")
-                        continue
+                if await self._ensure_connected():
+                    await self._scrape_chat_incremental(chat_id, last_scraped_id, retry_count + 1)
+                else:
+                    print(f"Could not reconnect. Skipping chat {chat_id}.")
+            else:
+                print(f"Max retries reached for chat {chat_id}. Skipping.")
 
-                # Save the latest message ID for next scrape
-                if max_message_id > last_scraped_id:
-                    self._save_last_message_id(chat_id, max_message_id)
-
-                print(f"Incremental scrape complete for chat {chat_id_int}")
-                print(f"Total messages scanned: {total_scanned}")
-                print(f"Total text messages processed: {message_count}")
-                print(f"Total polymer entries stored: {processed_count}")
-                print(f"Last message ID: {max_message_id}")
-
-            except Exception as e:
-                print(f"Error scraping chat {chat_id}: {e}")
-                import traceback
-                traceback.print_exc()
-                continue
+        except Exception as e:
+            print(f"Error scraping chat {chat_id}: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def monitor_new_messages(self):
         """
@@ -331,13 +359,13 @@ async def run_incremental_scraper():
 async def run_scheduled_scraper(interval_hours: int = 4):
     """
     Run the scraper on a schedule
-    Scrapes new messages every N hours
+    Scrapes new messages every N hours with reconnection support
     """
     scraper = PolymerScraper()
 
     try:
         await scraper.start()
-        print(f"✅ Scheduled scraper is running! Will scrape every {interval_hours} hours.")
+        print(f"Scheduled scraper is running! Will scrape every {interval_hours} hours.")
         print()
 
         while True:
@@ -346,7 +374,11 @@ async def run_scheduled_scraper(interval_hours: int = 4):
                 print(f"Starting scheduled scrape at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 print(f"{'='*60}\n")
 
-                await scraper.scrape_new_messages()
+                # Ensure connection is alive before scraping
+                if not await scraper._ensure_connected():
+                    print("Cannot connect for scheduled scrape. Will retry next interval.")
+                else:
+                    await scraper.scrape_new_messages()
 
                 print(f"\n{'='*60}")
                 print(f"Scrape complete. Next scrape in {interval_hours} hours.")

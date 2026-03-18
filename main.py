@@ -6,6 +6,7 @@ import argparse
 import sys
 from scraper import run_scraper, run_incremental_scraper, run_scheduled_scraper
 from bot import run_bot
+from database import PolymerDatabase
 import config
 
 
@@ -59,8 +60,20 @@ async def run_continuous_system(scrape_interval_hours: int = 4):
     print("=" * 60)
     print()
 
-    # Step 1: Do initial scraping if needed
-    print("Step 1: Checking for initial data...")
+    # Step 1: Purge old data (older than 2 weeks)
+    print("Step 1: Purging database data older than 2 weeks...")
+    try:
+        db = PolymerDatabase()
+        deleted = db.delete_old_data(days=14)
+        print(f"Database cleanup complete. Removed {deleted} old records.")
+        print()
+    except Exception as e:
+        print(f"Warning during database cleanup: {e}")
+        print("Continuing...")
+        print()
+
+    # Step 2: Do initial scraping if needed
+    print("Step 2: Checking for initial data...")
     print()
 
     try:
@@ -68,15 +81,15 @@ async def run_continuous_system(scrape_interval_hours: int = 4):
         print("Performing initial incremental scrape...")
         await run_incremental_scraper()
         print()
-        print("✅ Initial scrape complete!")
+        print("Initial scrape complete!")
         print()
     except Exception as e:
-        print(f"⚠️ Warning during initial scrape: {e}")
+        print(f"Warning during initial scrape: {e}")
         print("Continuing to system startup...")
         print()
 
-    # Step 2: Start both bot and scheduled scraper concurrently
-    print("Step 2: Starting continuous operation...")
+    # Step 3: Start both bot and scheduled scraper concurrently
+    print("Step 3: Starting continuous operation...")
     print(f"📱 Bot: Will respond to user queries 24/7")
     print(f"🔄 Scraper: Will fetch new messages every {scrape_interval_hours} hours")
     print()
