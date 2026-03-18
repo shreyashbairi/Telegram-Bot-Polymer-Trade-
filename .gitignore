@@ -5,7 +5,7 @@
 venv/
 env/
 ENV/
-
+ 
 # Database
 *.db
 *.db-journal

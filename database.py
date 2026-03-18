@@ -12,9 +12,16 @@ class PolymerDatabase:
         self.db_path = db_path or config.DATABASE_PATH
         self.init_database()
 
+    def _connect(self):
+        """Create a connection with WAL mode for concurrent bot+scraper access"""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        return conn
+
     def init_database(self):
         """Create database tables if they don't exist"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
 
         # Table for storing polymer prices
@@ -57,6 +64,16 @@ class PolymerDatabase:
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_chat_id
             ON polymer_prices(chat_id)
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_polymer_date
+            ON polymer_prices(normalized_name, date)
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_message_link
+            ON polymer_prices(message_link)
         ''')
 
         conn.commit()
@@ -113,12 +130,26 @@ class PolymerDatabase:
 
         return normalized.strip()
 
+    def message_link_exists(self, message_link: str) -> bool:
+        """Check if any record with this message_link already exists in the DB"""
+        if not message_link:
+            return False
+        conn = self._connect()
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT 1 FROM polymer_prices WHERE message_link = ? LIMIT 1',
+            (message_link,)
+        )
+        exists = cursor.fetchone() is not None
+        conn.close()
+        return exists
+
     def insert_price(self, polymer_name: str, price: Optional[float],
                     status: str, date: datetime, message_text: str,
                     message_link: str, chat_id: str = None) -> bool:
         """Insert a polymer price record"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._connect()
             cursor = conn.cursor()
 
             normalized_name = self.normalize_polymer_name(polymer_name)
@@ -163,7 +194,7 @@ class PolymerDatabase:
 
     def get_polymer_history(self, polymer_name: str, days: int = 7) -> List[Dict]:
         """Get price history for a polymer for the last N days"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
 
         normalized_name = self.normalize_polymer_name(polymer_name)
@@ -195,7 +226,7 @@ class PolymerDatabase:
 
     def get_price_on_date(self, polymer_name: str, target_date: datetime) -> Optional[Dict]:
         """Get price for a specific date"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
 
         normalized_name = self.normalize_polymer_name(polymer_name)
@@ -226,7 +257,7 @@ class PolymerDatabase:
 
     def get_latest_price(self, polymer_name: str) -> Optional[Dict]:
         """Get the most recent price for a polymer"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
 
         normalized_name = self.normalize_polymer_name(polymer_name)
@@ -256,7 +287,7 @@ class PolymerDatabase:
 
     def get_latest_price_for_date(self, polymer_name: str, target_date: datetime) -> Optional[Dict]:
         """Get the most recent price for a polymer on a specific date (chronologically latest)"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
 
         normalized_name = self.normalize_polymer_name(polymer_name)
@@ -284,7 +315,7 @@ class PolymerDatabase:
 
     def get_price_stats_for_date(self, polymer_name: str, target_date: datetime) -> Optional[Dict]:
         """Get price statistics (min, max, mean) for a polymer on a specific date"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
 
         normalized_name = self.normalize_polymer_name(polymer_name)
@@ -364,7 +395,7 @@ class PolymerDatabase:
 
     def get_all_polymers(self) -> List[str]:
         """Get list of all unique polymer names"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -379,7 +410,7 @@ class PolymerDatabase:
 
     def get_unique_polymers_with_latest_date(self) -> List[Dict]:
         """Get unique polymers with their most recent dates"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -402,7 +433,7 @@ class PolymerDatabase:
 
     def search_polymers(self, search_query: str) -> List[Dict]:
         """Search for polymers by name (case-insensitive)"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
 
         # Search in both polymer_name and normalized_name
@@ -430,7 +461,7 @@ class PolymerDatabase:
 
     def get_all_polymers_for_date(self, target_date: datetime) -> List[Dict]:
         """Get all polymers with prices for a specific date"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -457,7 +488,7 @@ class PolymerDatabase:
 
     def get_latest_date_with_data(self) -> Optional[str]:
         """Get the most recent date that has polymer data"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -475,7 +506,7 @@ class PolymerDatabase:
 
     def get_price_range_for_polymer(self, polymer_name: str, days: int = 7) -> Optional[Dict]:
         """Get the highest and lowest prices for a polymer over the last N days"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         cursor = conn.cursor()
 
         normalized_name = self.normalize_polymer_name(polymer_name)
@@ -497,5 +528,53 @@ class PolymerDatabase:
             return {
                 'lowest': row[0],
                 'highest': row[1]
+            }
+        return None
+
+    def delete_old_data(self, retention_days: int = 14) -> int:
+        """Delete data older than retention_days. Returns number of rows deleted."""
+        conn = self._connect()
+        cursor = conn.cursor()
+
+        cutoff_date = (datetime.now() - timedelta(days=retention_days)).date()
+
+        # Count rows to be deleted
+        cursor.execute(
+            'SELECT COUNT(*) FROM polymer_prices WHERE date < ?',
+            (cutoff_date,)
+        )
+        count = cursor.fetchone()[0]
+
+        if count > 0:
+            cursor.execute(
+                'DELETE FROM polymer_prices WHERE date < ?',
+                (cutoff_date,)
+            )
+            conn.commit()
+            print(f"Deleted {count} records older than {cutoff_date}")
+        else:
+            print(f"No records older than {cutoff_date} to delete")
+
+        conn.close()
+        return count
+
+    def get_data_date_range(self) -> Optional[Dict]:
+        """Get the date range of data currently in the database"""
+        conn = self._connect()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT MIN(date) as oldest, MAX(date) as newest, COUNT(*) as total
+            FROM polymer_prices
+        ''')
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row and row[0]:
+            return {
+                'oldest_date': row[0],
+                'newest_date': row[1],
+                'total_records': row[2]
             }
         return None

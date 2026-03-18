@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''config.py'', doraise=True\\); print\\(''config.py OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''database.py'', doraise=True\\); print\\(''database.py OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''scraper.py'', doraise=True\\); print\\(''scraper.py OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''bot.py'', doraise=True\\); print\\(''bot.py OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''main.py'', doraise=True\\); print\\(''main.py OK''\\)\")",
+      "Bash(python -c \"import py_compile; py_compile.compile\\(''parser.py'', doraise=True\\); print\\(''parser.py OK''\\)\")",
+      "Bash(python -c \":*)",
+      "Bash(pip install python-dotenv)",
+      "Bash(python -m pip install python-dotenv)",
+      "Bash(python main.py --help)",
+      "Bash(python -m pip install telethon python-telegram-bot openai)",
+      "Bash(py -c \"import py_compile; py_compile.compile\\(''scraper.py'', doraise=True\\); print\\(''OK''\\)\")",
+      "Bash(/c/Users/Hp/AppData/Local/Python/pythoncore-3.14-64/python.exe -c \"import py_compile; py_compile.compile\\(''scraper.py'', doraise=True\\); print\\(''OK''\\)\")"
+    ]
+  }
+}

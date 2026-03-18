@@ -1,185 +1,157 @@
 """
-Main entry point for the Polymer Price Telegram Bot
+Main entry point for the Polymer Price Telegram Bot.
+
+Run modes
+---------
+  bot            – Start the bot only (always-on, answers user queries).
+  scraper-loop   – Start the scraper loop only (scrapes every N hours, cleans old data).
+  continuous     – Run bot + scraper-loop together in one process.
+  scrape         – One-time historical scrape, then exit.
+  incremental    – One-time incremental scrape + cleanup, then exit.
+  full           – Historical scrape followed by bot startup.
+
+Examples
+--------
+  python main.py bot
+  python main.py scraper-loop --interval 4
+  python main.py continuous --interval 4
+  python main.py scrape --days 14
 """
 import asyncio
 import argparse
 import sys
-from scraper import run_scraper, run_incremental_scraper, run_scheduled_scraper
+
+from scraper import run_scraper, run_incremental_scraper, run_scraper_loop
 from bot import run_bot
 from database import PolymerDatabase
 import config
 
 
-async def run_full_system():
+async def run_continuous(interval_hours: int = None):
     """
-    Run both scraper and bot together
-    First scrapes historical data, then starts the bot
+    Run bot and scraper-loop together in one process.
+    Both tasks run concurrently via asyncio.gather.
+    If either crashes, the other is cancelled gracefully.
     """
-    print("=" * 50)
-    print("POLYMER PRICE TELEGRAM BOT")
-    print("=" * 50)
-    print()
+    if interval_hours is None:
+        interval_hours = config.SCRAPE_INTERVAL_HOURS
 
-    # Step 1: Run scraper to collect historical data
-    print("Step 1: Collecting historical data...")
-    print(f"Scraping {config.DAYS_TO_SCRAPE} days of messages from group...")
-    print()
-
-    try:
-        await run_scraper(days=config.DAYS_TO_SCRAPE)
-        print()
-        print("✅ Historical data collection complete!")
-        print()
-    except Exception as e:
-        print(f"❌ Error during scraping: {e}")
-        print("Continuing to bot startup...")
-        print()
-
-    # Step 2: Start the bot
-    print("Step 2: Starting the bot...")
-    print("The bot will now respond to user queries.")
-    print()
-
-    try:
-        await run_bot()
-    except KeyboardInterrupt:
-        print("\nBot stopped by user.")
-    except Exception as e:
-        print(f"❌ Error running bot: {e}")
-        sys.exit(1)
-
-
-async def run_continuous_system(scrape_interval_hours: int = 4):
-    """
-    Run bot and scheduled scraper together continuously (24/7)
-    - Bot responds to user queries
-    - Scraper runs every N hours to get new data
-    """
     print("=" * 60)
-    print("POLYMER PRICE TELEGRAM BOT - CONTINUOUS MODE")
+    print("POLYMER PRICE BOT – CONTINUOUS MODE")
+    print("=" * 60)
+    print(f"  Bot:     always on")
+    print(f"  Scraper: every {interval_hours}h, keeping {config.DATA_RETENTION_DAYS}d of data")
     print("=" * 60)
     print()
 
-    # Step 1: Purge old data (older than 2 weeks)
-    print("Step 1: Purging database data older than 2 weeks...")
+    # Do a quick incremental scrape before starting
     try:
-        db = PolymerDatabase()
-        deleted = db.delete_old_data(days=14)
-        print(f"Database cleanup complete. Removed {deleted} old records.")
-        print()
-    except Exception as e:
-        print(f"Warning during database cleanup: {e}")
-        print("Continuing...")
-        print()
-
-    # Step 2: Do initial scraping if needed
-    print("Step 2: Checking for initial data...")
-    print()
-
-    try:
-        # Do a quick incremental scrape to get latest messages
-        print("Performing initial incremental scrape...")
+        print("Initial incremental scrape...")
         await run_incremental_scraper()
-        print()
-        print("Initial scrape complete!")
-        print()
+        print("Initial scrape complete.\n")
     except Exception as e:
         print(f"Warning during initial scrape: {e}")
-        print("Continuing to system startup...")
-        print()
+        print("Continuing to system startup...\n")
 
-    # Step 3: Start both bot and scheduled scraper concurrently
-    print("Step 3: Starting continuous operation...")
-    print(f"📱 Bot: Will respond to user queries 24/7")
-    print(f"🔄 Scraper: Will fetch new messages every {scrape_interval_hours} hours")
-    print()
-    print("=" * 60)
-    print("STARTING BOTH SERVICES...")
-    print("=" * 60)
-    print()
-
+    # Run both concurrently
     try:
-        # Run bot and scheduled scraper in parallel
         await asyncio.gather(
             run_bot(),
-            run_scheduled_scraper(interval_hours=scrape_interval_hours)
+            run_scraper_loop(interval_hours=interval_hours),
         )
     except KeyboardInterrupt:
-        print("\n\nSystem stopped by user.")
-    except Exception as e:
-        print(f"❌ Error running system: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        print("\nContinuous system stopped by user.")
 
 
 async def main():
-    """Main function with command-line argument parsing"""
+    """CLI entry point"""
     parser = argparse.ArgumentParser(
-        description="Polymer Price Telegram Bot - Track and query polymer prices"
+        description="Polymer Price Telegram Bot – Track and query polymer prices",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python main.py bot                    Start bot only
+  python main.py scraper-loop           Start scraper loop only (every 4h)
+  python main.py continuous             Bot + scraper in one process
+  python main.py scrape --days 14       One-time historical scrape
+  python main.py incremental            One-time incremental scrape
+"""
     )
+
     parser.add_argument(
         "mode",
-        choices=["full", "scrape", "bot", "continuous", "incremental"],
-        help="Run mode: 'full' (scrape then bot), 'scrape' (historical scrape only), "
-             "'bot' (bot only), 'continuous' (bot + scheduled scraper 24/7), "
-             "'incremental' (scrape only new messages)"
+        choices=["bot", "scraper-loop", "continuous", "scrape", "incremental", "full"],
+        help="Run mode"
     )
     parser.add_argument(
         "--days",
         type=int,
-        default=config.DAYS_TO_SCRAPE,
-        help=f"Number of days to scrape (default: {config.DAYS_TO_SCRAPE})"
+        default=config.DATA_RETENTION_DAYS,
+        help=f"Days to scrape in historical mode (default: {config.DATA_RETENTION_DAYS})"
     )
     parser.add_argument(
         "--interval",
         type=int,
-        default=4,
-        help="Hours between scrapes in continuous mode (default: 4)"
+        default=config.SCRAPE_INTERVAL_HOURS,
+        help=f"Hours between scrapes (default: {config.SCRAPE_INTERVAL_HOURS})"
     )
 
     args = parser.parse_args()
 
-    if args.mode == "full":
-        await run_full_system()
+    # ---------------------------------------------------------------
 
-    elif args.mode == "scrape":
-        print(f"Scraping {args.days} days of historical data...")
-        try:
-            await run_scraper(days=args.days)
-            print("✅ Scraping complete!")
-        except Exception as e:
-            print(f"❌ Error during scraping: {e}")
-            sys.exit(1)
-
-    elif args.mode == "incremental":
-        print("Scraping new messages since last scrape...")
-        try:
-            await run_incremental_scraper()
-            print("✅ Incremental scrape complete!")
-        except Exception as e:
-            print(f"❌ Error during scraping: {e}")
-            sys.exit(1)
-
-    elif args.mode == "bot":
-        print("Starting bot...")
+    if args.mode == "bot":
+        print("Starting bot (always-on)...")
         try:
             await run_bot()
         except KeyboardInterrupt:
             print("\nBot stopped by user.")
-        except Exception as e:
-            print(f"❌ Error running bot: {e}")
-            sys.exit(1)
+
+    elif args.mode == "scraper-loop":
+        print(f"Starting scraper loop (every {args.interval}h)...")
+        try:
+            await run_scraper_loop(interval_hours=args.interval)
+        except KeyboardInterrupt:
+            print("\nScraper loop stopped by user.")
 
     elif args.mode == "continuous":
-        print(f"Starting continuous mode (scraping every {args.interval} hours)...")
+        await run_continuous(interval_hours=args.interval)
+
+    elif args.mode == "scrape":
+        print(f"One-time historical scrape ({args.days} days)...")
         try:
-            await run_continuous_system(scrape_interval_hours=args.interval)
-        except KeyboardInterrupt:
-            print("\nContinuous system stopped by user.")
+            await run_scraper(days=args.days)
+            print("Scraping complete!")
         except Exception as e:
-            print(f"❌ Error running continuous system: {e}")
+            print(f"Error during scraping: {e}")
             sys.exit(1)
+
+    elif args.mode == "incremental":
+        print("One-time incremental scrape + cleanup...")
+        try:
+            await run_incremental_scraper()
+            print("Incremental scrape complete!")
+        except Exception as e:
+            print(f"Error during scraping: {e}")
+            sys.exit(1)
+
+    elif args.mode == "full":
+        print("=" * 50)
+        print("POLYMER PRICE BOT – FULL MODE")
+        print("=" * 50)
+        print(f"\nStep 1: Historical scrape ({args.days} days)...")
+        try:
+            await run_scraper(days=args.days)
+            print("Historical scrape complete!\n")
+        except Exception as e:
+            print(f"Error during scraping: {e}")
+            print("Continuing to bot startup...\n")
+
+        print("Step 2: Starting bot...")
+        try:
+            await run_bot()
+        except KeyboardInterrupt:
+            print("\nBot stopped by user.")
 
 
 if __name__ == "__main__":
