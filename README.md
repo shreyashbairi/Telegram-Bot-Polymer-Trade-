@@ -9,9 +9,11 @@ A comprehensive Telegram bot system that scrapes polymer price data from trading
 - **Intelligent Message Scraping**: Fetches messages from Telegram groups using Telethon
 - **Incremental Updates**: Tracks last scraped message to avoid reprocessing
 - **Hybrid Parsing**: Combines fast regex patterns with OpenAI GPT-4o-mini fallback
-- **Smart Data Cleaning**: Removes emojis, trailing periods, and normalizes names
-- **30-Day Data Retention**: Automatically maintains rolling window of historical data
+- **Smart Data Cleaning**: Removes emojis/trailing periods, rejects non-polymer junk (machinery, adverts), and normalizes names
+- **21-Day Data Retention**: Automatically maintains rolling window of historical data
 - **SQLite Storage**: Local database with efficient indexing and duplicate handling
+- **Auto-Reconnect**: Telethon and Telegram bot connections recover from transient network issues
+- **Whitespace-Clean State**: State file keys are stripped of whitespace on load and write
 
 ### Bot Commands
 - `/start` - Welcome message with quick-access polymer menu
@@ -19,8 +21,8 @@ A comprehensive Telegram bot system that scrapes polymer price data from trading
 - `/list` - Browse all available polymers with pagination
 - `/search <name>` - Search for specific polymers by name
 - `/clear` - Clear chat history for a fresh start
-- `/daily <polymer> [days]` - Show daily price statistics with highest/lowest/mean/diff
-- `/compare <polymer1> <polymer2> [days]` - Compare two polymers side-by-side
+- `/daily [date]` - Show all polymers with prices for a specific day
+- `/compare <polymer1> [polymer2] [date]` - Compare polymers or show price stats
 - Direct text queries - Simply type a polymer name to get instant price history
 
 ### Advanced Features
@@ -28,7 +30,7 @@ A comprehensive Telegram bot system that scrapes polymer price data from trading
 - **Hyperlinked References**: Clean message formatting with 🔗 emoji links to source messages
 - **Partial Data Display**: Show available data even when comparisons have incomplete overlap
 - **Price Statistics**: Calculate highest, lowest, mean, difference, and latest prices per day
-- **Smart Normalization**: Consistent polymer matching regardless of formatting variations
+- **Smart Normalization**: One identity per polymer regardless of case, spacing, hyphens or vendor wording, plus a `polymer_aliases.txt` file for genuine synonyms
 - **Private Chat Only**: Bot only responds in private messages for security
 - **User Access Control**: Optional whitelist to restrict bot access to specific user IDs
 - **Message Link Tracking**: Every price entry linked to its source Telegram message
@@ -47,19 +49,22 @@ A comprehensive Telegram bot system that scrapes polymer price data from trading
 10. [Database Schema](#database-schema)
 11. [Deployment](#deployment)
 12. [Troubleshooting](#troubleshooting)
-13. [API Costs](#api-costs)
-14. [Project Structure](#project-structure)
+13. [Monitoring OpenAI Credits](#monitoring-openai-credits)
+14. [API Costs](#api-costs)
+15. [Project Structure](#project-structure)
 
 ## 🏗️ Architecture
 
-The system consists of four main components working together:
+The system consists of five main components working together:
 
 ### 1. **Scraper** (`scraper.py`)
 - Uses Telethon to connect to Telegram and fetch messages
 - Supports both historical scraping (N days back) and incremental scraping (new messages only)
-- Tracks last scraped message ID in `last_scraped_message.json`
+- Tracks last scraped message ID in `scraper_state.json` (per-chat, with metadata)
+- Calls `_ensure_connected()` at the start of every cycle and per chat — prevents the "Cannot send requests while disconnected" cascade that happens when the MTProto connection dies during the long sleep between cycles
 - Runs on a schedule (default: every 4 hours) in continuous mode
 - Handles rate limiting and connection errors gracefully
+- Retries in 5 minutes after a cycle-level failure (not the full interval)
 
 ### 2. **Parser** (`parser.py`)
 - **Phase 1**: Fast regex patterns for well-formatted messages
@@ -78,10 +83,13 @@ The system consists of four main components working together:
 - Message links for source reference
 - Unique constraints prevent duplicate entries
 - Indexed on polymer name and date for fast queries
-- 30-day rolling window maintenance
+- 21-day rolling window maintenance (old records auto-deleted each cycle)
 
 ### 4. **Bot** (`bot.py`)
-- Python-telegram-bot v21.10 framework
+- Python-telegram-bot v21+ framework
+- HTTPXRequest configured with 20s connect / 30s read timeouts — resilient to transient DNS or wifi blips on 24/7 laptops
+- Global error handler swallows handler-level network errors so one failed reply can't crash the process
+- Startup waits for internet before connecting (prevents instant crash when laptop boots before wifi)
 - HTML formatting for rich message display
 - Interactive inline keyboard menus
 - Pagination for long polymer lists
@@ -90,9 +98,9 @@ The system consists of four main components working together:
 
 ### 5. **Main Controller** (`main.py`)
 - Orchestrates all components with asyncio
-- Five run modes: full, scrape, bot, continuous, incremental
+- Six run modes: `bot`, `scraper-loop`, `continuous`, `scrape`, `incremental`, `full`
 - Command-line interface with arguments
-- Concurrent execution of bot and scraper
+- Concurrent execution of bot and scraper via `asyncio.gather`
 - Graceful shutdown handling
 
 ## 📦 Prerequisites
@@ -104,7 +112,7 @@ The system consists of four main components working together:
 - **Telegram Bot Token** (create bot via @BotFather)
   - The bot operates independently and only needs to respond to private messages
   - The bot does NOT need to be added to the trading groups
-- **OpenAI API Key** (get from https://platform.openai.com)
+- **OpenAI API Key** with active billing (get from https://platform.openai.com)
 - **Access to polymer trading groups** (your account must be a member of each group)
 
 ## 🔧 Installation
@@ -115,12 +123,33 @@ git clone <repository-url>
 cd Telegram-Bot-Polymer-Trade-
 ```
 
-### 2. Install Dependencies
+### 2. Set Up a Virtual Environment (Recommended)
+
+**Windows**:
+```powershell
+python -m venv venv
+venv\Scripts\activate
+```
+
+**Linux/macOS**:
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+Always verify your shell prompt shows `(venv)` before running anything — if it doesn't, you're using the global Python and your installed packages may differ.
+
+### 3. Install Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Set Up Configuration
+If anything looks stale after pulling updates:
+```bash
+pip install --upgrade python-telegram-bot telethon httpx openai python-dotenv
+```
+
+### 4. Set Up Configuration
 Create a `.env` file in the root directory:
 
 ```env
@@ -129,7 +158,7 @@ TELEGRAM_API_ID=your_api_id
 TELEGRAM_API_HASH=your_api_hash
 TELEGRAM_PHONE=+1234567890
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
-TELEGRAM_CHAT_IDS=-1001234567890
+TELEGRAM_CHAT_IDS=-1001234567890,-1002345678900
 
 # Bot Access Control (optional - comma-separated list of user IDs)
 # Leave empty to allow all users, or specify user IDs to restrict access
@@ -143,7 +172,9 @@ OPENAI_ORG_ID=org-...
 DATABASE_PATH=polymer_prices.db
 ```
 
-### 4. Security Note
+**Note on whitespace**: Spaces between comma-separated chat IDs are now stripped automatically in `config.py`, so both `-1001,-1002` and `-1001, -1002` work. Earlier versions treated them as different keys in the state file, causing silent data loss for chats whose IDs happened to be entered with leading spaces.
+
+### 5. Security Note
 The `.env` file is automatically ignored by git to protect your credentials. Never commit API keys to version control.
 
 ## ⚙️ Configuration
@@ -162,9 +193,16 @@ The `.env` file is automatically ignored by git to protect your credentials. Nev
 | `OPENAI_ORG_ID` | OpenAI organization ID | `org-...` |
 | `DATABASE_PATH` | SQLite database file path | `polymer_prices.db` |
 
+### Scraping Configuration (in `config.py`)
+
+| Constant | Default | Description |
+|----------|---------|-------------|
+| `DATA_RETENTION_DAYS` | `21` | Rolling window; records older than this are deleted each cycle |
+| `SCRAPE_INTERVAL_HOURS` | `4` | How often the scheduled scraper runs in continuous mode |
+
 ### Getting Telegram Chat IDs
 
-1. Add your bot to the target group
+1. Add your account to the target group
 2. Forward a message from the group to @userinfobot
 3. The bot will show you the chat ID (starts with `-100`)
 
@@ -186,14 +224,14 @@ By default, the bot responds to all users who message it privately. To restrict 
 
 1. **Authenticate with Telegram**:
    ```bash
-   python main.py scrape --days 7
+   python main.py scrape --days 21
    ```
    - Telethon will prompt for a verification code
    - Check your Telegram app for the code
    - Enter it in the terminal
-   - A session file is created (only needed once)
+   - A session file (`polymer_scraper_session.session`) is created — only needed once
 
-2. **Run in Continuous Mode**:
+2. **Run in Continuous Mode** (the normal 24/7 operation):
    ```bash
    python main.py continuous --interval 4
    ```
@@ -206,7 +244,31 @@ By default, the bot responds to all users who message it privately. To restrict 
    - Open Telegram and search for your bot username
    - Start a private chat
    - Type `/start` to see the welcome message
-   - Try queries like "0120" or "/search AKPC"
+   - Try queries like a polymer code (e.g. `0120`) or `/list`
+
+### Fresh-Start Procedure
+
+If your database looks incomplete, is corrupted, or you're switching to a new set of groups, a clean reset is:
+
+```bash
+# Stop any running instance first (Ctrl+C)
+del polymer_prices.db          # or rm on Linux/macOS
+del scraper_state.json         # forces scraper to re-pull the last 21 days
+
+python main.py continuous --interval 4
+```
+
+**Do NOT delete** `polymer_scraper_session.session` — that's your Telethon authentication. Deleting it forces a fresh SMS-code re-authentication.
+
+### What to Expect on First Run After a Fresh Start
+
+1. Telethon connects using the existing session — no SMS prompt.
+2. `Initial incremental scrape...` — since there's no `scraper_state.json`, every chat falls into the "no prior state" branch and pulls 21 days of history.
+3. For each configured chat: `Scraping chat: -100... (no prior state — fetching last 21 days)` followed by `Scanned N, processed M text, found K entries...` progress lines every 10 text messages.
+4. The initial scrape takes **significantly longer** than subsequent cycles — typically 10-30 minutes across a dozen active chats. All 21 days × N chats are being parsed in one pass.
+5. When that completes: `Bot is running and ready to respond to user queries!`
+6. The scraper then sleeps until the next 4-hour mark. Subsequent incremental scrapes are fast (seconds to a minute).
+7. `scraper_state.json` is recreated cleanly with no whitespace in keys.
 
 ## 📖 Usage Guide
 
@@ -237,26 +299,25 @@ Browse polymers and click to see prices.
 ```
 Find all polymers matching "2119".
 
-#### Viewing Statistics
+#### Viewing All Polymers for a Day
 ```
-/daily 0120
+/daily
 ```
-Shows daily statistics for the last 7 days:
-- Highest price with link 🔗
-- Lowest price with link 🔗
-- Mean (average) price
-- Difference (highest - lowest)
-- Latest recorded price with link 🔗
+Shows all polymers with prices for the latest day with data.
 
-**Custom date range**:
 ```
-/daily 0120 14
+/daily 23.04.26
 ```
-Shows statistics for the last 14 days.
+Shows all polymers with prices for a specific date (DD.MM.YY).
 
 #### Comparing Polymers
 
-**Single-word names**:
+**Single polymer, 7-day high/low**:
+```
+/compare 0120
+```
+
+**Two polymers over 7 days**:
 ```
 /compare 0120 0220
 ```
@@ -266,13 +327,13 @@ Shows statistics for the last 14 days.
 /compare (2119 Iran) (2119 Arya)
 ```
 
-**With custom date range**:
+**Specific date**:
 ```
-/compare (0209 AKPC) (0209 Amir Kabir) 10
+/compare 0120 23.04.26
+/compare (2119 Iran) (2119 Arya) 23.04.26
 ```
-Compares the two polymers over the last 10 days.
 
-**Partial data display**: The comparison shows data even when one polymer has missing days, explicitly noting "No data" for gaps.
+**Partial data display**: Comparisons show data even when one polymer has missing days, explicitly noting "No data" for gaps.
 
 ### For Administrators (System Operation)
 
@@ -282,10 +343,10 @@ See [Run Modes](#run-modes) section for detailed information on each mode.
 
 **Production (Recommended)**:
 ```bash
-# Initial data collection
-python main.py scrape --days 30
+# Initial data collection (only needed if you want to skip waiting on the first cycle)
+python main.py scrape --days 21
 
-# Start continuous operation
+# Normal 24/7 operation
 python main.py continuous --interval 4
 ```
 
@@ -296,6 +357,9 @@ python main.py scrape --days 7
 
 # Test bot only (with existing data)
 python main.py bot
+
+# Run scraper on its own in a separate process
+python main.py scraper-loop --interval 4
 ```
 
 **One-time update**:
@@ -315,19 +379,20 @@ python main.py incremental
 | `/list` | Browse all available polymers | `/list` |
 | `/search <query>` | Search for polymers by name | `/search 2119` |
 | `/clear` | Clear chat history | `/clear` |
-| `/daily <polymer> [days]` | Show daily price statistics | `/daily 0120 7` |
-| `/compare <p1> <p2> [days]` | Compare two polymers | `/compare 0120 0220 10` |
-| `<polymer name>` | Direct query for price history | `0120` |
+| `/daily [date]` | All polymers with prices for a day | `/daily 23.04.26` |
+| `/compare <p1> [p2] [date]` | Compare polymers or price stats | `/compare 0120 0220` |
+| `<polymer name>` | Direct query for 7-day price history | `0120` |
 
 ### System Commands (Command Line)
 
 | Command | Description |
 |---------|-------------|
-| `python main.py full` | Scrape 30 days then start bot |
-| `python main.py scrape --days N` | Scrape N days of historical data |
+| `python main.py continuous --interval N` | Run bot + scheduled scraper together (every N hours) — **recommended** |
 | `python main.py bot` | Start bot only (requires existing data) |
-| `python main.py continuous --interval N` | Run bot + scheduled scraper (every N hours) |
-| `python main.py incremental` | Scrape only new messages since last run |
+| `python main.py scraper-loop --interval N` | Start scraper loop only (no bot) |
+| `python main.py scrape --days N` | One-time historical scrape of N days |
+| `python main.py incremental` | One-time incremental scrape + cleanup |
+| `python main.py full` | One-time 21-day scrape, then start bot |
 
 ## 🔄 Run Modes
 
@@ -337,34 +402,39 @@ python main.py continuous --interval 4
 ```
 
 **What it does**:
-- Loads last scraped message ID from `last_scraped_message.json`
+- Loads state from `scraper_state.json`
 - Performs initial incremental scrape to catch up on new messages
 - Starts the Telegram bot (responds to user queries 24/7)
 - Starts the scheduled scraper (fetches new messages every N hours)
-- Both services run concurrently using asyncio.gather()
+- Both services run concurrently using `asyncio.gather()`
 
-**When to use**: Production deployment, 24/7 operation
+**When to use**: Production deployment, 24/7 operation.
 
-**Output**:
-```
-✅ Bot is running and ready to respond to user queries!
-✅ Scheduled scraper is running! Will scrape every 4 hours.
-```
-
-### 2. Historical Scrape Mode
+### 2. Scraper-Loop Mode (Scraper Only)
 ```bash
-python main.py scrape --days 30
+python main.py scraper-loop --interval 4
+```
+
+**What it does**:
+- Starts only the scraper's scheduled loop (no bot)
+- Useful when you want to run the bot in a separate process or on a different machine
+
+**When to use**: Distributed deployments where scraping and bot handling are separate services.
+
+### 3. Historical Scrape Mode
+```bash
+python main.py scrape --days 21
 ```
 
 **What it does**:
 - Scrapes N days of historical messages from Telegram groups
 - Parses and stores all polymer prices in the database
-- Saves the last message ID to `last_scraped_message.json`
+- Updates `scraper_state.json`
 - Exits after completion
 
-**When to use**: Initial setup, backfilling data, testing scraper
+**When to use**: Initial setup, backfilling data, testing scraper.
 
-### 3. Bot Only Mode
+### 4. Bot Only Mode
 ```bash
 python main.py bot
 ```
@@ -374,32 +444,33 @@ python main.py bot
 - Responds to user queries using existing database
 - Does not scrape any new messages
 
-**When to use**: Testing bot functionality, when scraping is handled separately
+**When to use**: Testing bot functionality, when scraping is handled separately.
 
-### 4. Incremental Scrape Mode
+### 5. Incremental Scrape Mode
 ```bash
 python main.py incremental
 ```
 
 **What it does**:
-- Loads last scraped message ID from tracking file
-- Scrapes only messages newer than the last ID
-- Updates the tracking file with new last message ID
+- Loads last scraped message ID from `scraper_state.json`
+- Scrapes only messages newer than the last ID (per chat)
+- Updates the tracking file with new last message IDs
+- Runs 21-day cleanup
 - Exits after completion
 
-**When to use**: Manual updates, cron jobs, testing incremental logic
+**When to use**: Manual updates, cron jobs, testing incremental logic.
 
-### 5. Full Mode
+### 6. Full Mode
 ```bash
 python main.py full
 ```
 
 **What it does**:
-- Scrapes 30 days of historical data
+- Scrapes 21 days of historical data
 - Immediately starts the bot after scraping completes
 - Does NOT use scheduled scraping (one-time scrape only)
 
-**When to use**: First-time setup in environments without continuous operation
+**When to use**: First-time setup in environments without continuous operation.
 
 ## 🔍 How It Works
 
@@ -407,11 +478,33 @@ python main.py full
 
 1. **Connection**: Telethon connects to Telegram using your API credentials
 2. **Authentication**: Session file stores authentication (persists across runs)
-3. **Message Fetching**:
+3. **Connection check**: Before each cycle and per chat, `_ensure_connected()` verifies the client socket is alive and reconnects if needed
+4. **Message Fetching**:
    - Historical mode: Fetches messages from N days ago to present
-   - Incremental mode: Fetches only messages with ID > last_scraped_message_id
-4. **Tracking**: Saves the highest message ID to `last_scraped_message.json`
-5. **Scheduling**: In continuous mode, repeats every N hours
+   - Incremental mode: Fetches only messages with ID > `last_scraped_id` for that chat
+5. **Tracking**: Saves the highest message ID per chat to `scraper_state.json` in a finally-block, so partial progress is preserved even if a cycle crashes
+6. **Scheduling**: In continuous mode, repeats every N hours
+
+### State File Format (`scraper_state.json`)
+
+```json
+{
+  "chats": {
+    "-1001234567890": {
+      "last_message_id": 54321,
+      "last_scrape_time": "2026-04-24T10:30:00"
+    },
+    "-1002345678900": {
+      "last_message_id": 98765,
+      "last_scrape_time": "2026-04-24T10:30:02"
+    }
+  },
+  "last_cleanup_time": "2026-04-24T10:30:15",
+  "data_retention_days": 14
+}
+```
+
+On load, any chat-id keys containing whitespace are automatically cleaned and merged with the whitespace-free version. If a legacy `last_scraped_message.json` exists (flat `{chat_id: msg_id}` format), it's migrated to the new format on first run.
 
 ### Parsing Logic
 
@@ -427,58 +520,82 @@ The parser tries 7 different regex patterns optimized for common formats:
 "0209 🔴 AKPC  17000"     # With emojis (removed)
 ```
 
-**Key feature**: Uses `[ \t]` instead of `\s` in patterns to prevent matching across newlines, fixing multi-line parsing bugs.
+**Key feature**: Uses `[ \t]` instead of `\s` in patterns to prevent matching across newlines.
 
 #### Phase 2: AI-Powered Parsing
 
-If regex fails to extract data, the system falls back to OpenAI:
+If regex fails to extract data, the system falls back to OpenAI GPT-4o-mini. Only ~2-5% of messages need AI parsing.
 
-```python
-# Sent to GPT-4o-mini:
-Parse this message and extract polymer names and prices:
-"0120 18500
-0220 18800
-0120 analigi eron 17000"
-
-# Returns structured JSON:
-[
-  {"polymer_name": "0120", "price": 18500},
-  {"polymer_name": "0220", "price": 18800},
-  {"polymer_name": "0120 analigi eron", "price": 17000}
-]
-```
-
-**Cost optimization**: Only 2-5% of messages need AI parsing. GPT-4o-mini is 60x cheaper than GPT-4.
+**If OpenAI credits run out, scraping and cleanup continue to work normally** — only the 2-5% of complex messages go unparsed. See [Monitoring OpenAI Credits](#monitoring-openai-credits).
 
 #### Phase 3: Data Cleaning
 
 Before storing in the database:
 
-1. **Emoji Removal**: `0209 🔴 AKPC` → `0209 AKPC`
-2. **Period Removal**: `0120.` → `0120`
-3. **Normalization**: Convert to lowercase, remove extra spaces
-4. **Deduplication**: Check unique constraint (normalized_name, date, message_id)
+1. **Junk rejection**: Non-polymer listings are dropped — machinery (anything
+   with a `kw`/`кв` power rating, extruders, granulators, shredders, moulds),
+   free-text adverts, bare decimals like `0.4`, and vendor-only names like
+   `Shurtan`. See `is_valid_polymer_name()` / `NON_POLYMER_TERMS` in `normalizer.py`.
+2. **Emoji Removal**: `0209 🔴 AKPC` → `0209 AKPC`
+3. **Period Removal**: `0120.` → `0120`
+4. **Alias canonicalization**: Map known alternative spellings to one canonical
+   "original name" via `polymer_aliases.txt` (e.g. `J-2200`, `Uz-Kor Gas J2200`
+   → `2200`). See [Polymer Name Normalization](#polymer-name-normalization).
+5. **Normalization**: A single separator-invariant key per polymer — lower-case,
+   strip vendor words, and collapse spaces/hyphens so `Y-130`, `Y 130` and `Y130`
+   are all one polymer.
+6. **Deduplication**: Check unique constraint (normalized_name, date, message_link)
 
-### Query Processing
+### Polymer Name Normalization
 
-1. **User Input**: Receives command or text query
-2. **Normalization**: Applies same cleaning rules as parsing
-3. **Database Lookup**: Searches by normalized name
-4. **Date Filtering**: Retrieves prices for requested date range
-5. **Statistics**: Calculates highest, lowest, mean, diff if using /daily
-6. **Formatting**: Generates HTML-formatted response with hyperlinked emojis
-7. **Response**: Sends via Telegram with `parse_mode='HTML'`
+So the same polymer always resolves to one identity (extra rows differ only by
+date/price, never by spelling), names are normalized two ways:
 
-### Comparison Logic
+**1. Automatic (no configuration).** Case, surrounding spaces, hyphens, emojis,
+trailing dots and vendor/origin words (`Uz-Kor Gas`, `Uzkor`, `Shurtan`, `Iran`)
+are ignored — for both the identity key **and** the displayed name. This alone
+merges `Y-130` / `Y 130` / `Y130` / `Uz-Kor Gas Y130`, and `Uz-Kor Gas J550` is
+stored and shown simply as `J550`. No list needed, including future spellings.
 
-When comparing two polymers:
+**2. Alias file — grade folding (`polymer_aliases.txt`).** Declare a canonical
+grade number and every spelling of that grade — any producer, type-prefix or
+quality/tier wording — folds into it. Adding a grade is one line:
 
-1. Retrieves data for both polymers over N days
-2. Groups by day (1 = yesterday, 2 = 2 days ago, etc.)
-3. Calculates statistics for each polymer on each day
-4. Shows data side-by-side
-5. Explicitly displays "No data" when one polymer has no entries for a day
-6. Links to source messages with 🔗 emoji
+```
+[Original Name]
+2200
+```
+
+That makes `2200`, `J-2200`, `Uz-Kor Gas J-2200`, `2200 repack`,
+`LLDPE 2200 Amir Kabir`, `2200 original` … all resolve to **`2200`** — the
+number is matched wherever it appears as a whole number and the surrounding
+words are dropped.
+
+Short numbers (1–2 digits) are ambiguous on their own — a bare `3` would also
+catch `SG3` / `CK-30` / `30%`. For those, add the prefixed grade code so it
+folds the right family only:
+
+```
+[Original Name]
+3
+
+[Alternative Names]
+BL3
+```
+
+- `30% TiO2` and other percentages are never read as a grade number; leading
+  zeros matter (`030` ≠ `30`).
+- A price posted under any spelling is stored **and displayed** under the bare
+  number.
+- The file is **re-read automatically when it changes**, so new edits apply to
+  newly scraped data without restarting the bot or scraper.
+- To re-label data **already in the database** after editing the file, run:
+  ```bash
+  python apply_normalization.py
+  ```
+  This backs up the database first, then merges historical rows under the new
+  canonical names. Only the name columns change — prices, dates and links are
+  untouched.
 
 ## 💾 Database Schema
 
@@ -508,40 +625,33 @@ CREATE INDEX idx_polymer_date ON polymer_prices(normalized_name, date);
 CREATE INDEX idx_chat_id ON polymer_prices(chat_id);
 ```
 
-### Tracking File: `last_scraped_message.json`
-
-```json
-{
-  "-1001234567890": 54321,
-  "-1009876543210": 98765
-}
-```
-
-Maps chat IDs to the last message ID scraped from each chat. Used by incremental scraping to avoid reprocessing.
-
 ### Data Retention
 
-The system automatically maintains a 30-day rolling window:
-- Old entries (>30 days) are kept but may be excluded from queries
-- Scraper only fetches messages from last 30 days in historical mode
-- Database size remains manageable
+The system automatically maintains a 21-day rolling window:
+- Records older than `DATA_RETENTION_DAYS` are deleted at the end of each scrape cycle
+- Incremental scraper stops going back further than the retention window even if the last-known message ID would allow it
+- Database size remains manageable (low MBs for most chat volumes)
 
 ## 🚀 Deployment
 
-### Option 1: Screen Session (Quick & Simple)
+### Option 1: Windows Task Scheduler (24/7 Laptop)
+
+Your use case. Create a scheduled task that runs at logon:
+- Program: `C:\Users\Hp\Desktop\Telegram-Bot-Polymer-Trade-\venv\Scripts\python.exe`
+- Arguments: `main.py continuous --interval 4`
+- Start in: `C:\Users\Hp\Desktop\Telegram-Bot-Polymer-Trade-`
+- "Restart the task if it fails": Yes, every 1 minute
+
+### Option 2: Screen Session (Linux/macOS)
 
 ```bash
-# Start a screen session
 screen -S polymer-bot
-
-# Run continuous mode
 python main.py continuous --interval 4
-
 # Detach: Ctrl+A, then D
 # Reattach: screen -r polymer-bot
 ```
 
-### Option 2: Systemd Service (Production)
+### Option 3: Systemd Service (Linux Production)
 
 Create `/etc/systemd/system/polymer-bot.service`:
 
@@ -562,74 +672,53 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
-Enable and start:
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable polymer-bot
 sudo systemctl start polymer-bot
-sudo systemctl status polymer-bot
-```
-
-View logs:
-```bash
 sudo journalctl -u polymer-bot -f
 ```
 
-### Option 3: Docker (Isolated Environment)
-
-Create `Dockerfile`:
+### Option 4: Docker
 
 ```dockerfile
-FROM python:3.9-slim
+FROM python:3.11-slim
 
 WORKDIR /app
-
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
 COPY . .
 
 CMD ["python", "main.py", "continuous", "--interval", "4"]
 ```
 
-Build and run:
 ```bash
 docker build -t polymer-bot .
 docker run -d --name polymer-bot --restart unless-stopped polymer-bot
-```
-
-View logs:
-```bash
 docker logs -f polymer-bot
-```
-
-### Option 4: PM2 (Process Manager)
-
-```bash
-# Install PM2
-npm install -g pm2
-
-# Start bot
-pm2 start "python main.py continuous --interval 4" --name polymer-bot
-
-# Monitor
-pm2 status
-pm2 logs polymer-bot
-
-# Auto-restart on reboot
-pm2 startup
-pm2 save
 ```
 
 ## 🔧 Troubleshooting
 
 ### Scraper Issues
 
-#### "Last scraped message ID: 0" after historical scrape
+#### "Cannot send requests while disconnected"
 
-**Cause**: You're using an older version before the tracking fix.
+**Cause**: Telethon's MTProto connection died during the long sleep between cycles, and a request was attempted before reconnect.
 
-**Solution**: Update to the latest code. The historical scraper now saves the last message ID.
+**Solution**: Already handled in the current code. `_ensure_connected()` is called at the top of each cycle and per chat. If you still see this, check that you're running the updated `scraper.py`.
+
+#### Only a handful of records in the database after days of running
+
+**Cause**: This was a silent indentation bug in older versions of `scraper.py` — the message-processing block was one level too shallow, so only the last message of each chat got processed per cycle.
+
+**Solution**: The current version has this fixed. If you're seeing an abnormally small DB, delete both `polymer_prices.db` and `scraper_state.json` and restart to re-pull the full 21-day window.
+
+#### State file has chat-id keys with leading spaces
+
+**Cause**: Older version split `TELEGRAM_CHAT_IDS` without stripping whitespace. Any spaces after commas in `.env` became leading whitespace on the keys, silently splitting state tracking between two near-identical keys.
+
+**Solution**: `config.py` now strips every ID, and `_load_state()` in `scraper.py` one-time-migrates existing dirty keys on startup. Just run normally — you'll see a `Cleaned whitespace in state key: ...` log line if migration was needed.
 
 #### "Could not connect to Telegram"
 
@@ -641,72 +730,36 @@ pm2 save
 - Ensure phone number format is correct (include country code: `+971...`)
 - Delete session file and re-authenticate
 
-#### "No messages found" or "Total messages scanned: 0"
-
-**Cause**: Chat ID is incorrect or bot lacks access.
-
-**Solution**:
-- Verify the chat ID starts with `-100` for supergroups
-- Ensure you're a member of the group
-- Check that the group has messages in the date range
-- Try fetching a shorter period: `--days 1`
-
 #### Scraper stops with "FloodWaitError"
 
 **Cause**: Telegram rate limiting (too many requests).
 
 **Solution**:
-- The scraper automatically handles this with exponential backoff
+- Telethon handles this with exponential backoff
 - If persistent, reduce scraping frequency: `--interval 8`
 - Wait 10-15 minutes before retrying
 
 ### Parser Issues
 
-#### "OpenAI API error: 429 Too Many Requests"
-
-**Cause**: Rate limit exceeded on OpenAI API.
-
-**Solution**:
-- The parser implements exponential backoff (retries after 2s, 4s, 8s, 16s)
-- Upgrade your OpenAI plan for higher rate limits
-- Most messages use regex parsing, so this is rare
-
-#### "OpenAI API error: 401 Unauthorized"
-
-**Cause**: Invalid API key.
-
-**Solution**:
-- Verify `OPENAI_API_KEY` in `.env`
-- Check if the key is active on https://platform.openai.com
-- Ensure sufficient credits in your OpenAI account
-
-#### "Multiple polymers treated as one"
-
-**Cause**: Older version with `\s` in regex patterns.
-
-**Solution**: Update to latest code. Regex now uses `[ \t]` to prevent multi-line matching.
-
-#### "No polymers extracted from message"
-
-**Cause**: Message format doesn't match any patterns.
-
-**Solution**:
-- Check console output to see the message text
-- Verify it contains price data (numbers after polymer names)
-- OpenAI fallback should handle most cases
-- Consider adding a new regex pattern for the format
+See [Monitoring OpenAI Credits](#monitoring-openai-credits) for OpenAI-specific error signatures.
 
 ### Bot Issues
+
+#### "getaddrinfo failed" or `NetworkError: httpx.ConnectError`
+
+**Cause**: Transient DNS resolution failure — the laptop's network briefly couldn't resolve `api.telegram.org`. Happens on 24/7 machines when wifi flaps or DNS hiccups.
+
+**Solution**: Already handled. The current `bot.py` configures `HTTPXRequest` with 20s connect / 30s read timeouts, registers a global error handler that swallows handler-level network blips without crashing, and waits for internet on startup. If you still see crashes, check that you're running the updated `bot.py`.
 
 #### "Bot not responding to commands"
 
 **Cause**: Bot stopped or invalid token.
 
 **Solution**:
-- Check if bot is running: Look for "✅ Bot is running" message
+- Check if bot is running: look for "Bot is running and ready to respond to user queries!" line
 - Verify `TELEGRAM_BOT_TOKEN` in `.env`
 - Ensure bot isn't stopped in @BotFather
-- Check bot only responds in private chats (not groups)
+- Bot only responds in private chats, never groups
 - Restart: `python main.py bot`
 
 #### "No data available for this polymer"
@@ -715,28 +768,8 @@ pm2 save
 
 **Solution**:
 - Run scraper first: `python main.py scrape --days 7`
-- Check if database file exists: `ls -lh polymer_prices.db`
-- Query a different polymer name that definitely exists
-- Run `/list` to see available polymers
-
-#### "Bot responds in continuous mode but doesn't scrape"
-
-**Cause**: Scheduled scraper error (check logs).
-
-**Solution**:
-- Look for error messages in console output
-- Verify Telethon session is valid
-- Check disk space (database needs write access)
-- Ensure both services started (look for both ✅ messages)
-
-#### "/compare command not working with spaces"
-
-**Cause**: Forgot to use parentheses for multi-word names.
-
-**Solution**: Use `(polymer name)` syntax:
-```
-/compare (2119 Iran) (2119 Arya)
-```
+- Check if database file exists and has records: `sqlite3 polymer_prices.db "SELECT COUNT(*) FROM polymer_prices;"`
+- Run `/list` in the bot to see what polymers are actually available
 
 ### Database Issues
 
@@ -745,48 +778,84 @@ pm2 save
 **Cause**: Multiple processes accessing database simultaneously.
 
 **Solution**:
-- Only run one instance of the bot
-- Check for zombie processes: `ps aux | grep main.py`
-- Kill duplicates: `pkill -f "python main.py"`
+- Only run one instance of `main.py continuous` at a time
+- If running `bot` and `scraper-loop` separately, they still share the DB — SQLite's write lock is short-lived but concurrent writes during a cycle spike can briefly collide. Use `continuous` mode instead for single-laptop deployments.
+- Check for zombie processes: Task Manager (Windows) or `ps aux | grep main.py` (Linux)
 
 #### Database file corrupted
 
 **Cause**: Unexpected shutdown or disk issues.
 
 **Solution**:
-- Backup current database: `cp polymer_prices.db polymer_prices.db.bak`
+- Backup current database: `copy polymer_prices.db polymer_prices.db.bak`
 - Try recovery: `sqlite3 polymer_prices.db ".recover" > recovered.sql`
-- Worst case: Delete database and re-scrape: `rm polymer_prices.db && python main.py scrape --days 30`
+- Worst case: Delete database and re-scrape: `del polymer_prices.db` then `python main.py scrape --days 21`
 
 #### Database growing too large
 
-**Cause**: Accumulation of old data.
+**Cause**: Unlikely with 21-day retention but possible over years.
 
 **Solution**:
-- Check size: `ls -lh polymer_prices.db`
-- Vacuum database: `sqlite3 polymer_prices.db "VACUUM;"`
-- Delete old entries: `sqlite3 polymer_prices.db "DELETE FROM polymer_prices WHERE date < date('now', '-60 days');"`
+- Check size: `dir polymer_prices.db`
+- Vacuum: `sqlite3 polymer_prices.db "VACUUM;"`
 
-### General Issues
+### Venv Issues
 
-#### High memory usage
+#### "ModuleNotFoundError" when running the script
 
-**Cause**: Processing large number of messages.
-
-**Solution**:
-- Reduce scraping period: `--days 7` instead of `--days 30`
-- Increase scraping interval: `--interval 6` instead of `--interval 4`
-- Monitor with: `top -p $(pgrep -f "python main.py")`
-
-#### Bot stops after some time
-
-**Cause**: Unhandled exception or network issue.
+**Cause**: Virtual environment not activated, or dependencies not installed in it.
 
 **Solution**:
-- Use a process manager (systemd, PM2, or screen)
-- Check logs for error messages before crash
-- Ensure `Restart=always` in systemd service
-- Monitor with: `pm2 monit` (if using PM2)
+- Activate venv: `venv\Scripts\activate` (Windows) or `source venv/bin/activate` (Linux/macOS)
+- Verify the prompt shows `(venv)` before the path
+- Reinstall deps: `pip install -r requirements.txt`
+
+#### "unexpected keyword argument 'connection_pool_size'" from HTTPXRequest
+
+**Cause**: `python-telegram-bot` is older than v20 and doesn't support the pool-size kwarg.
+
+**Solution**: `pip install --upgrade python-telegram-bot` (need v21+).
+
+## 💳 Monitoring OpenAI Credits
+
+**Important**: The system is designed so that running out of OpenAI credits does NOT stop scraping or cleanup. Regex parses ~95% of messages. OpenAI is a fallback for the remaining ~5% of complex or multi-language messages. If OpenAI fails, those messages are silently skipped but everything else keeps working.
+
+### How to Check Credit Balance
+
+**Dashboard**: [platform.openai.com/usage](https://platform.openai.com/usage) — shows remaining credits, daily spend, and rate-limit headroom.
+
+**Proactive Alerts**: Settings → Billing → Usage Limits:
+- Set a **soft limit** (e.g., $2/month) to get a warning email
+- Set a **hard limit** (e.g., $5/month) to auto-cut usage at the ceiling
+
+### Error Signatures in the Console
+
+When OpenAI credits are exhausted, the scraper's parse-error lines will contain one of these:
+
+| Error message | Meaning |
+|---|---|
+| `insufficient_quota` | Paid credit balance exhausted |
+| `Error code: 429 - You exceeded your current quota` | Same thing, different wording |
+| `Error code: 401 - Invalid API key` | Key deactivated or wrong |
+| `billing_hard_limit_reached` | Hard limit you configured was hit |
+
+These appear inside `Error processing message {id}: ...` lines.
+
+### Data-Level Symptoms
+
+If scraping runs without obvious errors but new records slow down disproportionately to chat activity, parsing is degraded. Diagnostic query:
+
+```bash
+sqlite3 polymer_prices.db "SELECT date, COUNT(*) FROM polymer_prices GROUP BY date ORDER BY date DESC;"
+```
+
+If recent days show a sudden drop compared to a week ago without a matching drop in chat volume, check OpenAI credits.
+
+### Restoring Service
+
+- Top up credits at [platform.openai.com/billing](https://platform.openai.com/account/billing)
+- No need to restart the bot — the next scrape cycle will automatically start using AI parsing again
+- Messages that were skipped during the outage won't be retried (the scraper moves forward via `min_id`); they're just gone from the retention window
 
 ## 💰 API Costs
 
@@ -827,27 +896,33 @@ Telegram-Bot-Polymer-Trade-/
 │
 ├── config.py                      # Configuration loader from .env
 ├── database.py                    # Database operations & queries
+├── normalizer.py                  # Loads polymer_aliases.txt, canonicalizes names
 ├── parser.py                      # Message parsing (regex + OpenAI)
 ├── scraper.py                     # Telegram message scraper (Telethon)
 ├── bot.py                         # Bot handlers & commands
 ├── main.py                        # Main entry point & orchestration
+├── apply_normalization.py         # One-off: re-label existing DB rows from aliases
 │
+├── polymer_aliases.txt            # EDIT THIS: original ↔ alternative polymer names
 ├── README.md                      # This file
 ├── USAGE.md                       # Detailed usage and deployment guide
 │
 ├── polymer_prices.db              # SQLite database (auto-created)
-├── last_scraped_message.json      # Tracking file for incremental scraping
-└── *.session                      # Telethon session files (auto-created)
+├── scraper_state.json             # Per-chat scraping state (auto-created)
+└── polymer_scraper_session.session  # Telethon session file (auto-created after first auth)
 ```
 
 ### Key Files
 
-- **config.py**: Loads environment variables, validates configuration
+- **config.py**: Loads environment variables, strips whitespace from chat IDs
 - **database.py**: SQLite operations, normalization, queries, schema management
+- **normalizer.py**: Loads `polymer_aliases.txt` and maps alternative spellings to a canonical name (auto-reloads on file change)
+- **polymer_aliases.txt**: Human-editable list of original ↔ alternative polymer names
+- **apply_normalization.py**: One-off script to re-label rows already in the database after editing the aliases
 - **parser.py**: Hybrid parsing with 7 regex patterns + GPT-4o-mini fallback
-- **scraper.py**: Telethon integration, message fetching, tracking, scheduling
-- **bot.py**: Telegram bot handlers, command processing, response formatting
-- **main.py**: Command-line interface, mode selection, asyncio orchestration
+- **scraper.py**: Telethon integration, message fetching, per-chat state tracking, 21-day cleanup, auto-reconnect
+- **bot.py**: Telegram bot handlers, command processing, HTTPX hardening, error handler
+- **main.py**: CLI interface, six run modes, asyncio orchestration
 
 ## 🔐 Security Notes
 
@@ -859,7 +934,6 @@ Telegram-Bot-Polymer-Trade-/
 
 ### Bot Privacy & Access Control
 - Bot only responds in private chats (ignores group messages)
-- This prevents unauthorized users from accessing price data in public groups
 - Optional user whitelist via `ALLOWED_USER_IDS` to restrict access to specific users
 - When enabled, unauthorized users receive rejection message
 - Leave `ALLOWED_USER_IDS` empty to allow all users
@@ -871,150 +945,9 @@ Telegram-Bot-Polymer-Trade-/
 
 ### Recommendations
 - Use strong API keys and rotate them periodically
-- Run bot on a secure server with firewall rules
+- Run bot on a secure machine with current OS patches
 - Monitor logs for unusual activity
 - Keep dependencies updated: `pip install -U -r requirements.txt`
-
-## 🎯 Extending the System
-
-### Adding More Telegram Groups
-
-The system fully supports scraping from multiple Telegram groups simultaneously.
-
-**Configuration:**
-
-Edit `.env` and add multiple chat IDs (comma-separated):
-```env
-TELEGRAM_CHAT_IDS=-1001234567890,-1002345678900,-1003456789000
-```
-
-**How it works:**
-
-1. **Scraper loops through all groups**: Each group is scraped independently
-2. **Per-group tracking**: `last_scraped_message.json` tracks the last message ID for each group separately
-3. **Group identification**: Each price entry in the database includes a `chat_id` column showing which group it came from
-4. **Historical scraping**: `python main.py scrape --days 7` scrapes all configured groups
-5. **Continuous mode**: `python main.py continuous --interval 4` scrapes all groups every 4 hours
-6. **Incremental updates**: Each group's messages are fetched starting from its last scraped message ID
-
-**Requirements:**
-
-- Your Telegram account (with API credentials) must be a member of all groups you want to scrape
-- The bot itself doesn't need to be in the groups (scraping uses your personal account, bot only handles queries)
-
-**Example tracking file:**
-```json
-{
-  "-1001234567890": 54321,
-  "-1002345678900": 98765,
-  "-1003456789012": 12345
-}
-```
-
-Each group maintains its own position, allowing efficient incremental scraping.
-
-### Customizing Scraping Schedule
-
-Change the interval hours:
-```bash
-python main.py continuous --interval 6    # Every 6 hours
-python main.py continuous --interval 2    # Every 2 hours
-```
-
-### Adding New Regex Patterns
-
-Edit `parser.py` and add to the `patterns` list:
-```python
-patterns = [
-    # Existing patterns...
-    r'YOUR_NEW_PATTERN_HERE',
-]
-```
-
-Use `[ \t]` for whitespace (not `\s`) to avoid multi-line matching.
-
-### Custom Bot Commands
-
-Add new handlers in `bot.py`:
-```python
-self.app.add_handler(CommandHandler("mycommand", self.my_command_handler))
-
-async def my_command_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("My custom response")
-```
-
-### Export Functionality
-
-Add a new command to export data:
-```python
-import csv
-
-def export_to_csv(self, polymer_name: str, days: int = 30):
-    prices = self.db.get_price_history(polymer_name, days)
-    with open(f'{polymer_name}_export.csv', 'w') as f:
-        writer = csv.writer(f)
-        writer.writerow(['Date', 'Price', 'Status'])
-        for entry in prices:
-            writer.writerow([entry['date'], entry['price'], entry['status']])
-```
-
-### Price Alerts
-
-Implement monitoring for price changes:
-```python
-def check_price_alerts(self):
-    # Get current prices
-    # Compare with threshold
-    # Send notification if exceeded
-    pass
-```
-
-### Analytics Dashboard
-
-Create a web interface:
-- Flask/FastAPI for backend
-- Read from SQLite database
-- Display charts with Chart.js or Plotly
-- Show trends, averages, comparisons
-
-## 📊 Advanced Features
-
-### Fuzzy Search
-
-The bot implements smart matching:
-- "j150" matches "Uz-Kor Gas J 150"
-- "2119 iran" matches "2119 Iran Petrochemical"
-- Handles typos and variations
-
-### Pagination
-
-Large polymer lists are paginated:
-- Shows 10 items per page
-- "Next Page" and "Previous Page" buttons
-- Improves performance and UX
-
-### HTML Formatting
-
-Messages use HTML for rich display:
-```html
-<b>Bold text</b>
-<i>Italic text</i>
-<a href='https://t.me/...'>🔗</a>
-```
-
-### Message Links
-
-Every price entry includes source link:
-- Public groups: `https://t.me/username/message_id`
-- Private groups: `https://t.me/c/chat_id/message_id`
-- Click 🔗 to view original message
-
-### Rate Limiting
-
-Built-in protection:
-- Exponential backoff for Telegram API
-- OpenAI rate limit handling
-- Prevents API bans and overages
 
 ## 🆘 Support
 
@@ -1032,16 +965,17 @@ Built-in protection:
 # Verify Python version (need 3.8+)
 python --version
 
-# Check installed packages
+# Check installed packages inside the venv
 pip list
 
 # Test database
 sqlite3 polymer_prices.db "SELECT COUNT(*) FROM polymer_prices;"
 
-# View tracking file
-cat last_scraped_message.json
+# View state file
+type scraper_state.json            # Windows
+cat scraper_state.json             # Linux/macOS
 
-# Monitor logs in real-time
+# Monitor logs to a file while running
 python main.py continuous --interval 4 2>&1 | tee bot.log
 ```
 

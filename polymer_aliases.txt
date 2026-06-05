@@ -1,0 +1,101 @@
+# =====================================================================
+#  POLYMER NAME NORMALIZATION  (grade folding)
+# =====================================================================
+#  Each block declares ONE canonical grade. Every spelling of that grade —
+#  with any vendor, producer, type-prefix or quality/tier wording — is
+#  stored and shown under the canonical name.
+#
+#  HOW TO ADD A GRADE
+#  ------------------
+#    [Original Name]
+#    2200
+#
+#  That's it. Listing the bare number "2200" makes ALL of these fold to it:
+#    2200, J-2200, J2200, Uz-Kor Gas J-2200, uzkor 2200, 2200 repack,
+#    LLDPE 2200 Amir Kabir, 2200 original ...
+#  i.e. the number is matched wherever it appears as a whole number, and the
+#  surrounding producer / tier / vendor / prefix words are dropped.
+#
+#  SHORT NUMBERS (1-2 digits) NEED A PREFIXED EXAMPLE
+#  --------------------------------------------------
+#  A bare "3" or "30" is too ambiguous (it would also catch "SG3", "CK-30",
+#  "30%"). For those, add the prefixed grade code as an alternative so it
+#  matches the right family only:
+#    [Original Name]
+#    3
+#    [Alternative Names]
+#    BL3
+#
+#  NOTES
+#  -----
+#    * "30% TiO2" and other percentages are never treated as a grade number.
+#    * Leading zeros matter: 030 and 30 are different grades.
+#    * Lines starting with #  are comments. Blank lines are ignored.
+#    * Re-read automatically on change. To re-label existing rows, run:
+#          python apply_normalization.py
+# =====================================================================
+
+
+[Original Name]
+0209
+
+---
+
+[Original Name]
+2119
+
+---
+
+[Original Name]
+2102
+
+---
+
+[Original Name]
+52518
+
+---
+
+[Original Name]
+1003
+
+---
+
+[Original Name]
+100
+
+---
+
+[Original Name]
+030
+
+---
+
+[Original Name]
+2200
+
+---
+
+[Original Name]
+2210
+
+---
+
+[Original Name]
+0760
+
+---
+
+[Original Name]
+3
+
+[Alternative Names]
+BL3
+
+---
+
+[Original Name]
+30
+
+[Alternative Names]
+D30

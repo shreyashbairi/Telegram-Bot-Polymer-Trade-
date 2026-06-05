@@ -3,6 +3,8 @@ Telegram bot for handling user queries about polymer prices
 """
 import asyncio
 import hashlib
+import logging
+import socket
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import NetworkError, TimedOut, RetryAfter
@@ -12,10 +14,42 @@ from telegram.ext import (
     CallbackQueryHandler,
     MessageHandler,
     ContextTypes,
-    filters
+    filters,
 )
+from telegram.request import HTTPXRequest
 import config
 from database import PolymerDatabase
+
+
+logger = logging.getLogger(__name__)
+
+
+def _has_internet(host="8.8.8.8", port=53, timeout=5):
+    """Lightweight TCP check. Used to avoid hammering Telegram when wifi
+    is flapping and DNS resolution (getaddrinfo) is about to fail."""
+    try:
+        socket.setdefaulttimeout(timeout)
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((host, port))
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
+async def _wait_for_internet(max_wait_seconds=300):
+    """Block until internet is available, with exponential backoff.
+    Returns True if it became available, False after max_wait."""
+    waited = 0
+    delay = 2
+    while waited < max_wait_seconds:
+        if _has_internet():
+            return True
+        print(f"  No internet — waiting {delay}s... (total: {waited}s)")
+        await asyncio.sleep(delay)
+        waited += delay
+        delay = min(delay * 2, 30)
+    return False
 
 class PolymerPriceBot:
     def __init__(self):
@@ -62,8 +96,33 @@ class PolymerPriceBot:
         return context.bot_data['polymer_map'].get(callback_id)
 
     def build_application(self):
-        """Build the telegram bot application"""
-        self.app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+        """Build the telegram bot application with hardened HTTP settings."""
+        # Use generous timeouts — the default 5s connect timeout is too tight
+        # for a 24/7 laptop that occasionally has wifi blips. The pool-size
+        # bumps prevent "connection pool is full" warnings under light load.
+        request = HTTPXRequest(
+            connect_timeout=20.0,
+            read_timeout=30.0,
+            write_timeout=30.0,
+            pool_timeout=10.0,
+            connection_pool_size=16,
+        )
+        get_updates_request = HTTPXRequest(
+            connect_timeout=20.0,
+            read_timeout=40.0,      # long poll needs > 30s
+            write_timeout=30.0,
+            pool_timeout=10.0,
+            connection_pool_size=8,
+        )
+
+        self.app = (
+            Application.builder()
+            .token(config.TELEGRAM_BOT_TOKEN)
+            .request(request)
+            .get_updates_request(get_updates_request)
+            .build()
+        )
+
         # Add handlers - only respond to private chats
         self.app.add_handler(CommandHandler("start", self.start_command, filters=filters.ChatType.PRIVATE))
         self.app.add_handler(CommandHandler("help", self.help_command, filters=filters.ChatType.PRIVATE))
@@ -75,7 +134,23 @@ class PolymerPriceBot:
         self.app.add_handler(CallbackQueryHandler(self.handle_polymer_selection))
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, self.handle_text_query))
 
+        # Global error handler — handler-level network errors (like DNS blips
+        # during reply_text) otherwise propagate and can crash the process.
+        # With this registered, PTB logs them and keeps the bot running.
+        self.app.add_error_handler(self.error_handler)
+
         return self.app
+
+    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
+        """Swallow handler-level errors so one bad reply doesn't kill the bot."""
+        err = context.error
+        if isinstance(err, (NetworkError, TimedOut, OSError, ConnectionError)):
+            # Transient — just log and move on. The outer run() loop will
+            # reconnect if polling itself has gone down.
+            print(f"[handler network error — non-fatal]: {err}")
+        else:
+            print(f"[unhandled error in handler]: {err!r}")
+            logger.exception("Unhandled exception in bot handler", exc_info=err)
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command"""
@@ -263,7 +338,12 @@ The bot shows:
 
         for idx, polymer in enumerate(polymers, 1):
             polymer_info = f"{idx}. {polymer['polymer_name']}\n"
-            polymer_info += f"   💰 Price: {polymer['price']:.2f}"
+            if polymer['low'] == polymer['high']:
+                polymer_info += f"   💰 Price: {polymer['low']:.2f}"
+            else:
+                polymer_info += f"   💰 Price: {polymer['low']:.2f}–{polymer['high']:.2f}"
+            if polymer['listings'] > 1:
+                polymer_info += f" ({polymer['listings']} listings)"
             if polymer.get('message_link'):
                 polymer_info += f" <a href='{polymer['message_link']}'>🔗</a>"
             polymer_info += "\n\n"
@@ -917,13 +997,25 @@ The bot shows:
             await update_or_query.message.reply_text(message, disable_web_page_preview=True, parse_mode='HTML')
 
     async def run(self):
-        """Run the bot with automatic reconnection on network errors"""
+        """Run the bot with automatic reconnection on network errors.
+
+        Handles two layers of failure:
+          1. Startup/polling failures — caught by the outer try/except here.
+          2. Handler-level failures (e.g. reply_text during a DNS blip) —
+             caught by self.error_handler so the bot stays up.
+        """
         max_retries = 5
         retry_count = 0
         base_delay = 2
 
         while True:
             try:
+                # Wait for internet to be available before attempting to start.
+                # Prevents an instant crash when the laptop boots before wifi.
+                if not _has_internet():
+                    print("Waiting for internet connection before starting bot...")
+                    await _wait_for_internet(max_wait_seconds=600)
+
                 print("Starting Polymer Price Bot...")
                 await self.app.initialize()
                 await self.app.start()
@@ -969,6 +1061,11 @@ The bot shows:
 
                 await asyncio.sleep(delay)
 
+                # Wait for internet to come back before rebuilding
+                if not _has_internet():
+                    print("  Internet still down — waiting for it to return...")
+                    await _wait_for_internet(max_wait_seconds=600)
+
                 # Rebuild the application for a fresh connection
                 self.build_application()
 
@@ -982,6 +1079,21 @@ The bot shows:
                     pass
 
                 await asyncio.sleep(e.retry_after)
+                self.build_application()
+
+            except Exception as e:
+                # Catch-all: anything else that escapes the inner try should
+                # not kill the process. Log, pause, rebuild, try again.
+                print(f"Unexpected bot error: {e!r}")
+                import traceback
+                traceback.print_exc()
+                try:
+                    await self.app.updater.stop()
+                    await self.app.stop()
+                    await self.app.shutdown()
+                except Exception:
+                    pass
+                await asyncio.sleep(30)
                 self.build_application()
 
 

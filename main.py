@@ -15,7 +15,7 @@ Examples
   python main.py bot
   python main.py scraper-loop --interval 4
   python main.py continuous --interval 4
-  python main.py scrape --days 14
+  python main.py scrape --days 21
 """
 import asyncio
 import argparse
@@ -73,7 +73,7 @@ Examples:
   python main.py bot                    Start bot only
   python main.py scraper-loop           Start scraper loop only (every 4h)
   python main.py continuous             Bot + scraper in one process
-  python main.py scrape --days 14       One-time historical scrape
+  python main.py scrape --days 21       One-time historical scrape
   python main.py incremental            One-time incremental scrape
 """
     )

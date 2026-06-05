@@ -5,11 +5,22 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 import config
+from normalizer import (
+    PolymerNormalizer,
+    strip_emojis,
+    collapse_separators,
+    structural_key,
+    clean_display_name,
+    is_valid_polymer_name,
+)
 
 class PolymerDatabase:
     def __init__(self, db_path: str = None):
         """Initialize database connection"""
         self.db_path = db_path or config.DATABASE_PATH
+        # Loads polymer_aliases.txt and maps alternative spellings to a single
+        # canonical "original name". Reloads automatically when the file changes.
+        self.normalizer = PolymerNormalizer()
         self.init_database()
 
     def _connect(self):
@@ -80,55 +91,26 @@ class PolymerDatabase:
         conn.close()
 
     def normalize_polymer_name(self, name: str) -> str:
-        """Normalize polymer name for consistent matching"""
-        import re
+        """Normalize a polymer name to a single, separator-invariant key so the
+        same polymer always maps to one identity (multiple rows then differ only
+        by date/price, never by spelling).
 
-        # Define emoji pattern - matches most common emojis
-        emoji_pattern = re.compile(
-            "["
-            "\U0001F1E0-\U0001F1FF"  # flags (iOS)
-            "\U0001F300-\U0001F5FF"  # symbols & pictographs
-            "\U0001F600-\U0001F64F"  # emoticons
-            "\U0001F680-\U0001F6FF"  # transport & map symbols
-            "\U0001F700-\U0001F77F"  # alchemical symbols
-            "\U0001F780-\U0001F7FF"  # Geometric Shapes Extended
-            "\U0001F800-\U0001F8FF"  # Supplemental Arrows-C
-            "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
-            "\U0001FA00-\U0001FA6F"  # Chess Symbols
-            "\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
-            "\U00002702-\U000027B0"  # Dingbats
-            "\U000024C2-\U0001F251"
-            "\U0001f926-\U0001f937"
-            "\U00010000-\U0010ffff"
-            "\u2640-\u2642"
-            "\u2600-\u2B55"
-            "\u200d"
-            "\u23cf"
-            "\u23e9"
-            "\u231a"
-            "\ufe0f"  # dingbats
-            "\u3030"
-            "]+",
-            re.UNICODE
-        )
-
-        # Remove emojis first
-        normalized = emoji_pattern.sub('', name.strip())
-
-        # Remove trailing periods: "0120." -> "0120", "346." -> "346"
-        normalized = normalized.rstrip('.')
-
-        # Convert to lowercase
-        normalized = normalized.lower()
-
-        # Remove common prefixes and suffixes
-        normalized = normalized.replace('uz-kor gas', '').replace('uzkorgas', '')
-        normalized = normalized.replace('shurtan', '').replace('iran', '')
-
-        # Clean up extra spaces
-        normalized = ' '.join(normalized.split())
-
-        return normalized.strip()
+        Pipeline:
+          0. Alias canonicalization via polymer_aliases.txt
+             (e.g. "Uz-Kor Gas J-2200", "J2200" -> "2200").
+          1. structural_key(): strip emojis/dots, lower-case, collapse spaces and
+             hyphens, and remove vendor words ("Shurtan 0120" -> "0120").
+          2. Empty-key guard: a name of only vendor words never yields "" (which
+             would collide with every other vendor-only name).
+        Runs for BOTH inserts and queries, keeping the two in sync.
+        """
+        canonical = self.normalizer.canonicalize(name)
+        key = structural_key(canonical)
+        if not key:
+            # Name was only vendor words / emojis \u2014 fall back to the collapsed
+            # raw form so the key is never empty.
+            key = collapse_separators(strip_emojis(canonical).lower())
+        return key
 
     def message_link_exists(self, message_link: str) -> bool:
         """Check if any record with this message_link already exists in the DB"""
@@ -152,13 +134,17 @@ class PolymerDatabase:
             conn = self._connect()
             cursor = conn.cursor()
 
+            # Store under a clean canonical display name: apply aliases (e.g.
+            # "Uz-Kor Gas J-2200" -> "2200") then drop vendor words from what is
+            # shown to users ("Uz-Kor Gas J550" -> "J550").
+            display_name = clean_display_name(self.normalizer.canonicalize(polymer_name))
             normalized_name = self.normalize_polymer_name(polymer_name)
 
             cursor.execute('''
                 INSERT OR REPLACE INTO polymer_prices
                 (polymer_name, normalized_name, price, status, date, message_text, message_link, chat_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (polymer_name, normalized_name, price, status, date.date(),
+            ''', (display_name, normalized_name, price, status, date.date(),
                   message_text, message_link, chat_id))
 
             conn.commit()
@@ -167,62 +153,6 @@ class PolymerDatabase:
         except Exception as e:
             print(f"Error inserting price: {e}")
             return False
-
-    def delete_old_data(self, days: int = 14) -> int:
-        """Delete database records older than the specified number of days.
-        Returns the number of rows deleted."""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-
-            cutoff_date = (datetime.now() - timedelta(days=days)).date()
-
-            cursor.execute(
-                'DELETE FROM polymer_prices WHERE date < ?',
-                (cutoff_date.isoformat(),)
-            )
-
-            deleted = cursor.rowcount
-            conn.commit()
-            conn.close()
-
-            print(f"Purged {deleted} database records older than {days} days (before {cutoff_date})")
-            return deleted
-        except Exception as e:
-            print(f"Error purging old data: {e}")
-            return 0
-
-    def get_polymer_history(self, polymer_name: str, days: int = 7) -> List[Dict]:
-        """Get price history for a polymer for the last N days"""
-        conn = self._connect()
-        cursor = conn.cursor()
-
-        normalized_name = self.normalize_polymer_name(polymer_name)
-        end_date = datetime.now().date()
-        start_date = end_date - timedelta(days=days)
-
-        cursor.execute('''
-            SELECT polymer_name, price, status, date, message_text, message_link, chat_id
-            FROM polymer_prices
-            WHERE normalized_name = ?
-            AND date BETWEEN ? AND ?
-            ORDER BY date DESC
-        ''', (normalized_name, start_date, end_date))
-
-        results = []
-        for row in cursor.fetchall():
-            results.append({
-                'polymer_name': row[0],
-                'price': row[1],
-                'status': row[2],
-                'date': row[3],
-                'message_text': row[4],
-                'message_link': row[5],
-                'chat_id': row[6]
-            })
-
-        conn.close()
-        return results
 
     def get_price_on_date(self, polymer_name: str, target_date: datetime) -> Optional[Dict]:
         """Get price for a specific date"""
@@ -282,34 +212,6 @@ class PolymerDatabase:
                 'message_text': row[4],
                 'message_link': row[5],
                 'chat_id': row[6]
-            }
-        return None
-
-    def get_latest_price_for_date(self, polymer_name: str, target_date: datetime) -> Optional[Dict]:
-        """Get the most recent price for a polymer on a specific date (chronologically latest)"""
-        conn = self._connect()
-        cursor = conn.cursor()
-
-        normalized_name = self.normalize_polymer_name(polymer_name)
-
-        cursor.execute('''
-            SELECT price, message_link, chat_id
-            FROM polymer_prices
-            WHERE normalized_name = ?
-            AND date = ?
-            AND price IS NOT NULL
-            ORDER BY created_at DESC
-            LIMIT 1
-        ''', (normalized_name, target_date.date()))
-
-        row = cursor.fetchone()
-        conn.close()
-
-        if row:
-            return {
-                'price': row[0],
-                'link': row[1],
-                'chat_id': row[2]
             }
         return None
 
@@ -393,31 +295,25 @@ class PolymerDatabase:
             'count': len(prices)
         }
 
-    def get_all_polymers(self) -> List[str]:
-        """Get list of all unique polymer names"""
-        conn = self._connect()
-        cursor = conn.cursor()
-
-        cursor.execute('''
-            SELECT DISTINCT polymer_name
-            FROM polymer_prices
-            ORDER BY polymer_name
-        ''')
-
-        polymers = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        return polymers
-
     def get_unique_polymers_with_latest_date(self) -> List[Dict]:
-        """Get unique polymers with their most recent dates"""
+        """Get unique polymers (one row per normalized name) with their most
+        recent date. The display name is the most frequently used spelling for
+        that polymer, so the menu shows one consistent name instead of an
+        arbitrary variant."""
         conn = self._connect()
         cursor = conn.cursor()
 
+        # Sub-select picks the most common polymer_name for each normalized_name.
         cursor.execute('''
-            SELECT DISTINCT normalized_name, polymer_name, MAX(date) as latest_date
-            FROM polymer_prices
-            GROUP BY normalized_name
-            ORDER BY polymer_name
+            SELECT p.normalized_name,
+                   (SELECT d.polymer_name FROM polymer_prices d
+                    WHERE d.normalized_name = p.normalized_name
+                    GROUP BY d.polymer_name
+                    ORDER BY COUNT(*) DESC, d.polymer_name LIMIT 1) AS display_name,
+                   MAX(p.date) AS latest_date
+            FROM polymer_prices p
+            GROUP BY p.normalized_name
+            ORDER BY display_name
         ''')
 
         results = []
@@ -432,21 +328,30 @@ class PolymerDatabase:
         return results
 
     def search_polymers(self, search_query: str) -> List[Dict]:
-        """Search for polymers by name (case-insensitive)"""
+        """Search for polymers by name (case-insensitive). Matches the raw
+        spelling and the separator-invariant key, so "y-130", "y 130" and
+        "y130" all find the same polymer. Returns one row per polymer with its
+        most common display spelling."""
         conn = self._connect()
         cursor = conn.cursor()
 
-        # Search in both polymer_name and normalized_name
-        search_pattern = f"%{search_query.lower()}%"
+        raw_pattern = f"%{search_query.lower()}%"
+        # Collapsed pattern matches the normalized key regardless of separators.
+        collapsed_pattern = f"%{collapse_separators(search_query.lower())}%"
 
         cursor.execute('''
-            SELECT DISTINCT normalized_name, polymer_name, MAX(date) as latest_date
-            FROM polymer_prices
-            WHERE LOWER(polymer_name) LIKE ? OR LOWER(normalized_name) LIKE ?
-            GROUP BY normalized_name
-            ORDER BY polymer_name
+            SELECT p.normalized_name,
+                   (SELECT d.polymer_name FROM polymer_prices d
+                    WHERE d.normalized_name = p.normalized_name
+                    GROUP BY d.polymer_name
+                    ORDER BY COUNT(*) DESC, d.polymer_name LIMIT 1) AS display_name,
+                   MAX(p.date) AS latest_date
+            FROM polymer_prices p
+            WHERE LOWER(p.polymer_name) LIKE ? OR p.normalized_name LIKE ?
+            GROUP BY p.normalized_name
+            ORDER BY display_name
             LIMIT 20
-        ''', (search_pattern, search_pattern))
+        ''', (raw_pattern, collapsed_pattern))
 
         results = []
         for row in cursor.fetchall():
@@ -460,27 +365,38 @@ class PolymerDatabase:
         return results
 
     def get_all_polymers_for_date(self, target_date: datetime) -> List[Dict]:
-        """Get all polymers with prices for a specific date"""
+        """Get all polymers priced on a date — ONE row per polymer (grouped by
+        normalized name) with its price range and how many listings it had, so
+        the daily view shows each polymer once instead of repeating it for every
+        message/source."""
         conn = self._connect()
         cursor = conn.cursor()
 
         cursor.execute('''
-            SELECT polymer_name, price, status, message_link, created_at, chat_id
-            FROM polymer_prices
-            WHERE date = ?
-            AND price IS NOT NULL
-            ORDER BY polymer_name, created_at
+            SELECT p.normalized_name,
+                   (SELECT d.polymer_name FROM polymer_prices d
+                    WHERE d.normalized_name = p.normalized_name AND d.date = p.date
+                    GROUP BY d.polymer_name
+                    ORDER BY COUNT(*) DESC, d.polymer_name LIMIT 1) AS display_name,
+                   MIN(p.price) AS low, MAX(p.price) AS high, COUNT(*) AS listings,
+                   (SELECT d2.message_link FROM polymer_prices d2
+                    WHERE d2.normalized_name = p.normalized_name AND d2.date = p.date
+                    AND d2.price IS NOT NULL
+                    ORDER BY d2.created_at DESC LIMIT 1) AS latest_link
+            FROM polymer_prices p
+            WHERE p.date = ? AND p.price IS NOT NULL
+            GROUP BY p.normalized_name
+            ORDER BY display_name
         ''', (target_date.date(),))
 
         results = []
         for row in cursor.fetchall():
             results.append({
-                'polymer_name': row[0],
-                'price': row[1],
-                'status': row[2],
-                'message_link': row[3],
-                'created_at': row[4],
-                'chat_id': row[5]
+                'polymer_name': row[1],
+                'low': row[2],
+                'high': row[3],
+                'listings': row[4],
+                'message_link': row[5],
             })
 
         conn.close()
@@ -504,35 +420,10 @@ class PolymerDatabase:
             return row[0]
         return None
 
-    def get_price_range_for_polymer(self, polymer_name: str, days: int = 7) -> Optional[Dict]:
-        """Get the highest and lowest prices for a polymer over the last N days"""
-        conn = self._connect()
-        cursor = conn.cursor()
-
-        normalized_name = self.normalize_polymer_name(polymer_name)
-        end_date = datetime.now().date()
-        start_date = end_date - timedelta(days=days)
-
-        cursor.execute('''
-            SELECT MIN(price) as lowest, MAX(price) as highest
-            FROM polymer_prices
-            WHERE normalized_name = ?
-            AND date BETWEEN ? AND ?
-            AND price IS NOT NULL
-        ''', (normalized_name, start_date, end_date))
-
-        row = cursor.fetchone()
-        conn.close()
-
-        if row and row[0] and row[1]:
-            return {
-                'lowest': row[0],
-                'highest': row[1]
-            }
-        return None
-
-    def delete_old_data(self, retention_days: int = 14) -> int:
+    def delete_old_data(self, retention_days: int = None) -> int:
         """Delete data older than retention_days. Returns number of rows deleted."""
+        if retention_days is None:
+            retention_days = config.DATA_RETENTION_DAYS
         conn = self._connect()
         cursor = conn.cursor()
 
@@ -578,3 +469,76 @@ class PolymerDatabase:
                 'total_records': row[2]
             }
         return None
+
+    def renormalize_existing_data(self) -> Dict:
+        """Re-apply the alias canonicalization + normalization to every row
+        already in the database.
+
+        Run this once after editing polymer_aliases.txt so that historical rows
+        merge under the new canonical names (new data is handled automatically
+        on insert; this only backfills what is already stored).
+
+        Only the polymer_name (display) and normalized_name columns are
+        touched — prices, dates, links and chat ids are left intact. If
+        re-labelling a row would collide with the UNIQUE(normalized_name, date,
+        message_link) constraint (i.e. an alias and its original appeared for
+        the same message+day), the duplicate is folded into the survivor via
+        UPDATE OR REPLACE.
+
+        Returns a summary dict: {'total', 'updated'}.
+        """
+        conn = self._connect()
+        cursor = conn.cursor()
+
+        cursor.execute('SELECT id, polymer_name, normalized_name FROM polymer_prices')
+        rows = cursor.fetchall()
+
+        updated = 0
+        for row_id, polymer_name, normalized_name in rows:
+            new_display = clean_display_name(self.normalizer.canonicalize(polymer_name))
+            new_norm = self.normalize_polymer_name(polymer_name)
+
+            if new_display == polymer_name and new_norm == normalized_name:
+                continue  # nothing to change for this row
+
+            try:
+                cursor.execute(
+                    'UPDATE OR REPLACE polymer_prices '
+                    'SET polymer_name = ?, normalized_name = ? WHERE id = ?',
+                    (new_display, new_norm, row_id)
+                )
+                updated += cursor.rowcount
+            except Exception as e:
+                print(f"  Skipped row {row_id} ({polymer_name!r}): {e}")
+
+        conn.commit()
+        conn.close()
+        return {'total': len(rows), 'updated': updated}
+
+    def delete_invalid_entries(self, dry_run: bool = False) -> Dict:
+        """Remove rows whose polymer_name is not a real polymer (equipment
+        listings, free-text descriptions, bare decimals, vendor-only names).
+
+        Uses the same is_valid_polymer_name() rule the parser applies to new
+        data, so this back-cleans junk that was stored before that rule existed.
+        With dry_run=True nothing is deleted; the would-be-deleted names are
+        still returned for inspection.
+
+        Returns {'deleted', 'names': [(name, count), ...]}.
+        """
+        conn = self._connect()
+        cursor = conn.cursor()
+
+        cursor.execute('SELECT polymer_name, COUNT(*) FROM polymer_prices GROUP BY polymer_name')
+        invalid = [(name, cnt) for name, cnt in cursor.fetchall()
+                   if not is_valid_polymer_name(name)]
+
+        deleted = 0
+        if invalid and not dry_run:
+            for name, _cnt in invalid:
+                cursor.execute('DELETE FROM polymer_prices WHERE polymer_name = ?', (name,))
+                deleted += cursor.rowcount
+            conn.commit()
+
+        conn.close()
+        return {'deleted': deleted, 'names': invalid}

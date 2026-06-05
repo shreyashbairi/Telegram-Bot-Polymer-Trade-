@@ -13,7 +13,8 @@
       "Bash(python main.py --help)",
       "Bash(python -m pip install telethon python-telegram-bot openai)",
       "Bash(py -c \"import py_compile; py_compile.compile\\(''scraper.py'', doraise=True\\); print\\(''OK''\\)\")",
-      "Bash(/c/Users/Hp/AppData/Local/Python/pythoncore-3.14-64/python.exe -c \"import py_compile; py_compile.compile\\(''scraper.py'', doraise=True\\); print\\(''OK''\\)\")"
+      "Bash(/c/Users/Hp/AppData/Local/Python/pythoncore-3.14-64/python.exe -c \"import py_compile; py_compile.compile\\(''scraper.py'', doraise=True\\); print\\(''OK''\\)\")",
+      "Bash(PYTHONUTF8=1 venv/Scripts/python.exe -c ' *)"
     ]
   }
 }

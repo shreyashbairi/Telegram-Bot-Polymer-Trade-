@@ -9,6 +9,10 @@ ENV/
 # Database
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
+# Backups created by apply_normalization.py
+*.db.bak_*
 
 # Python
 __pycache__/

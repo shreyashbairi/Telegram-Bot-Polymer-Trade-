@@ -7,6 +7,7 @@ import time
 from typing import List, Dict
 from openai import OpenAI
 import config
+from normalizer import is_valid_polymer_name
 
 class PolymerParser:
     def __init__(self):
@@ -79,8 +80,6 @@ class PolymerParser:
 
     def _simple_parse(self, message_text: str) -> List[Dict]:
         """Simple regex-based parsing for well-formatted messages with STRICT validation"""
-        results = []
-
         # STRICT patterns to match polymer name and price
         # Key requirements:
         # 1. Price must be 5+ digits (10000+) to avoid matching polymer codes
@@ -109,76 +108,74 @@ class PolymerParser:
             r'([A-Za-z0-9][A-Za-z0-9 \t\-🔴🔵🟢🟡🟠🟣🟤⚪⚫]+[A-Za-z0-9]*)\s+(\d{5}(?:[.,]\d+)?)\s*(?:сумм|sum)',
         ]
 
-        for pattern in patterns:
-            matches = re.finditer(pattern, message_text, re.MULTILINE)
-            for match in matches:
-                try:
-                    groups = match.groups()
-                    if len(groups) < 2:
-                        continue
+        def _extract(name: str, price_str: str):
+            """Clean and validate one (name, price) pair.
+            Returns (name, price) or None if it should be rejected."""
+            # Remove ALL emojis (🔴, 🔵, flags, etc.), collapse spaces, drop dots.
+            name = ' '.join(self._remove_emojis(name).split()).rstrip('.')
 
-                    name = groups[0].strip()
-                    price_str = groups[1].strip()
+            if len(name) < 1 or (len(name) < 3 and not name[0].isdigit()):
+                return None
 
-                    # Clean up the name - remove ALL emojis (including 🔴, 🔵, flags, etc.)
-                    name = self._remove_emojis(name)
-                    name = ' '.join(name.split())
+            # Reject obvious non-polymers (equipment, descriptions, bare vendor
+            # names) before they reach the database.
+            if not is_valid_polymer_name(name):
+                return None
 
-                    # Remove trailing periods: "0120." -> "0120", "346." -> "346"
-                    name = name.rstrip('.')
+            # CRITICAL CHECK: ensure the price is NOT just the digits of the
+            # name itself — prevents "BL5200" parsing as price 5200, etc.
+            last_part = name.split()[-1] if name.split() else ""
+            if last_part and any(c.isdigit() for c in last_part):
+                digits_in_name = ''.join(c for c in last_part if c.isdigit())
+                if digits_in_name == price_str or price_str.startswith(digits_in_name):
+                    return None
+                if price_str == digits_in_name or digits_in_name.startswith(price_str):
+                    return None
 
-                    # Validation: ensure name is reasonable
-                    if len(name) < 1 or (len(name) < 3 and not name[0].isdigit()):
-                        continue
+            try:
+                price = float(price_str.replace(',', '.'))
+            except ValueError:
+                return None
+            # Only accept realistic polymer prices (>= 10000) — small numbers
+            # are polymer codes, not prices.
+            if price < 10000:
+                return None
+            return name, price
 
-                    # CRITICAL CHECK: Ensure the price is NOT part of the polymer name
-                    # This prevents "Uz-Kor Gas Jm370" from being parsed as price 370
-                    # or "BL5200" from being parsed as price 5200
-
-                    name_parts = name.split()
-                    last_part = name_parts[-1] if name_parts else ""
-
-                    # If the last part of the name contains digits, check for false matches
-                    if last_part and any(char.isdigit() for char in last_part):
-                        # Extract all digits from the last part of the name
-                        digits_in_name = ''.join(c for c in last_part if c.isdigit())
-
-                        # If the price matches the digits in the name, it's a false match - skip it
-                        # Examples that will be rejected:
-                        # - "Jm370" with price "370" or "3700"
-                        # - "BL5200" with price "5200"
-                        # - "1561" with price "1561"
-                        if digits_in_name == price_str or price_str.startswith(digits_in_name):
-                            continue
-                        if price_str == digits_in_name or digits_in_name.startswith(price_str):
-                            continue
-
-                    # Parse and validate price
-                    price = float(price_str.replace(',', '.'))
-
-                    # STRICT: Only accept realistic polymer prices >= 10000
-                    # Polymer prices typically range from 14000 to 20000
-                    # This prevents matching small numbers that are polymer codes
-                    if price >= 10000:
-                        results.append({
-                            'polymer_name': name,
-                            'price': price,
-                            'status': 'PRICED'
-                        })
-
-                except (ValueError, IndexError):
-                    continue
-
-        # Remove duplicates while preserving order
+        # Parse ONE LINE AT A TIME. A polymer and its price always sit on the
+        # same line, so processing per-line prevents a greedy name from
+        # swallowing the previous line's price across a newline (which produced
+        # phantom entries like "Original repack" with a neighbouring grade
+        # number as its "price").
         seen = set()
-        unique_results = []
-        for item in results:
-            key = item['polymer_name'].lower()
-            if key not in seen:
-                seen.add(key)
-                unique_results.append(item)
+        results = []
+        for line in message_text.splitlines():
+            # Collect candidate matches for this line. Different patterns can
+            # match overlapping spans (e.g. "0209 Amir Kabir  15800" yields both
+            # the full name and a bare "Amir Kabir"); keep the longest per span.
+            candidates = []  # (start, end, name, price)
+            for pattern in patterns:
+                for match in re.finditer(pattern, line):
+                    if len(match.groups()) < 2:
+                        continue
+                    extracted = _extract(match.group(1).strip(), match.group(2).strip())
+                    if extracted:
+                        candidates.append((match.start(), match.end(), extracted[0], extracted[1]))
 
-        return unique_results
+            # Longest match wins each span: earliest-and-longest first, then drop
+            # any candidate overlapping an already-accepted span.
+            candidates.sort(key=lambda c: (c[0], -(c[1] - c[0])))
+            accepted_spans = []
+            for start, end, name, price in candidates:
+                if any(start < a_end and a_start < end for a_start, a_end in accepted_spans):
+                    continue
+                accepted_spans.append((start, end))
+                key = name.lower()
+                if key not in seen:
+                    seen.add(key)
+                    results.append({'polymer_name': name, 'price': price, 'status': 'PRICED'})
+
+        return results
 
     def _openai_parse(self, message_text: str) -> List[Dict]:
         """Use OpenAI GPT-4o-mini to parse complex messages with strict validation and retry logic"""
@@ -297,6 +294,11 @@ If no polymers with explicit prices found, return an empty array: []
                                 # Remove trailing periods: "0120." -> "0120", "346." -> "346"
                                 polymer_name = polymer_name.rstrip('.')
 
+                                # Reject obvious non-polymers (equipment,
+                                # descriptions, bare vendor names).
+                                if not is_valid_polymer_name(polymer_name):
+                                    continue
+
                                 # Double-check: ensure price is not derived from polymer name
                                 name_parts = polymer_name.split()
                                 last_part = name_parts[-1] if name_parts else ""
@@ -341,18 +343,3 @@ If no polymers with explicit prices found, return an empty array: []
         # If we exhausted all retries
         print("Max retries exceeded for OpenAI parsing")
         return []
-
-    def extract_date_from_message(self, message_text: str) -> str:
-        """Extract date from message if present"""
-        # Pattern for dates like "19.01.2026" or "1️⃣9️⃣.0️⃣1️⃣.2️⃣0️⃣2️⃣6️⃣"
-        date_patterns = [
-            r'(\d{1,2})\.(\d{1,2})\.(\d{4})',
-            r'(\d)️⃣(\d)️⃣\.(\d)️⃣(\d)️⃣\.(\d)️⃣(\d)️⃣(\d)️⃣(\d)️⃣'
-        ]
-
-        for pattern in date_patterns:
-            match = re.search(pattern, message_text)
-            if match:
-                return match.group(0)
-
-        return None
