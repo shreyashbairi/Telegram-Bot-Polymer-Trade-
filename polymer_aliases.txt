@@ -5,30 +5,28 @@
 #  with any vendor, producer, type-prefix or quality/tier wording — is
 #  stored and shown under the canonical name.
 #
-#  HOW TO ADD A GRADE
-#  ------------------
+#  NORMAL GRADE  (the number is unique to one grade)
+#  -------------------------------------------------
 #    [Original Name]
-#    2200
+#    0120
 #
-#  That's it. Listing the bare number "2200" makes ALL of these fold to it:
-#    2200, J-2200, J2200, Uz-Kor Gas J-2200, uzkor 2200, 2200 repack,
-#    LLDPE 2200 Amir Kabir, 2200 original ...
-#  i.e. the number is matched wherever it appears as a whole number, and the
-#  surrounding producer / tier / vendor / prefix words are dropped.
+#  Listing just the number folds EVERY name that contains it as a whole
+#  number: 0120, F0120, F-0120, Shurtan 0120, ANALOG F-0120 ... -> 0120.
 #
-#  SHORT NUMBERS (1-2 digits) NEED A PREFIXED EXAMPLE
-#  --------------------------------------------------
-#  A bare "3" or "30" is too ambiguous (it would also catch "SG3", "CK-30",
-#  "30%"). For those, add the prefixed grade code as an alternative so it
-#  matches the right family only:
+#  AMBIGUOUS GRADE  (the same number is used by another grade)
+#  -----------------------------------------------------------
+#  e.g. "456" is used by both the Py-456 and the By-456 families. To fold
+#  ONLY one of them, list the prefixed code under [Alternative Names]; then
+#  the bare number is NOT matched on its own:
 #    [Original Name]
-#    3
+#    456
 #    [Alternative Names]
-#    BL3
+#    Py456
+#  -> Py456 / P-Y456 / PY 456 fold to 456, while BY456 stays separate.
 #
 #  NOTES
 #  -----
-#    * "30% TiO2" and other percentages are never treated as a grade number.
+#    * Percentages ("30% TiO2") are never read as a grade number.
 #    * Leading zeros matter: 030 and 30 are different grades.
 #    * Lines starting with #  are comments. Blank lines are ignored.
 #    * Re-read automatically on change. To re-label existing rows, run:
@@ -36,55 +34,76 @@
 # =====================================================================
 
 
+# ---- Normal grades: bare number folds every variant ------------------
+
+[Original Name]
+0120
+---
 [Original Name]
 0209
-
 ---
-
 [Original Name]
-2119
-
+0220
 ---
-
+[Original Name]
+0320
+---
+[Original Name]
+030
+---
+[Original Name]
+0754
+---
+[Original Name]
+0760
+---
+[Original Name]
+100
+---
+[Original Name]
+342
+---
+[Original Name]
+434
+---
+[Original Name]
+460
+---
+[Original Name]
+734
+---
+[Original Name]
+1003
+---
+[Original Name]
+1561
+---
 [Original Name]
 2102
-
 ---
-
+[Original Name]
+2119
+---
+[Original Name]
+2200
+---
+[Original Name]
+2210
+---
+[Original Name]
+2560
+---
+[Original Name]
+6200
+---
+[Original Name]
+7000
+---
 [Original Name]
 52518
 
----
 
-[Original Name]
-1003
-
----
-
-[Original Name]
-100
-
----
-
-[Original Name]
-030
-
----
-
-[Original Name]
-2200
-
----
-
-[Original Name]
-2210
-
----
-
-[Original Name]
-0760
-
----
+# ---- Ambiguous grades: fold only the listed prefix family ------------
 
 [Original Name]
 3
@@ -99,3 +118,43 @@ BL3
 
 [Alternative Names]
 D30
+
+---
+
+[Original Name]
+130
+
+[Alternative Names]
+Y130
+
+---
+
+[Original Name]
+150
+
+[Alternative Names]
+J150
+
+---
+
+[Original Name]
+170
+
+[Alternative Names]
+Fr170
+
+---
+
+[Original Name]
+346
+
+[Alternative Names]
+Fy346
+
+---
+
+[Original Name]
+456
+
+[Alternative Names]
+Py456

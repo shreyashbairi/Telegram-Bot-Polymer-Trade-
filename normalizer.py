@@ -264,17 +264,14 @@ class PolymerNormalizer:
         digit_grades = {}
         substr_grades = {}
 
-        def register(spelling, canonical):
-            match_map[_match_key(spelling)] = canonical
-            sk = structural_key(spelling)
+        def add_fold_token(token, canonical):
+            """Register one match token: a bare number (>= 3 digits) folds any
+            name containing it as a whole number; a code with letters (e.g.
+            "bl3", "py456") folds names whose structural key contains it."""
+            sk = structural_key(token)
             if not sk:
                 return
-            # Grade-number folding: classify the token so _fold_grade() can
-            # collapse every producer/tier variant to this canonical number.
             if sk.isdigit():
-                # A bare number >= 3 digits is specific enough to match on its
-                # own. Shorter ones (3, 30) are ambiguous and only fold via a
-                # prefixed alternative below.
                 if len(sk) >= 3:
                     digit_grades[sk] = canonical
             else:
@@ -299,43 +296,45 @@ class PolymerNormalizer:
             print(f"[normalizer] Could not read {self.alias_file}: {e}")
             return  # keep whatever mapping we already had
 
-        original = None        # current block's canonical name
-        section = None         # 'original' | 'alternatives' | None
-
+        # First parse the file into blocks: [(original, [alternatives]), ...].
+        blocks = []
+        section = None
+        expecting_original = False   # set right after [Original Name]
         for raw in lines:
             line = raw.strip()
             if not line or line.startswith('#'):
                 continue
-
             low = line.lower()
-
-            if line == '---':                       # block separator
-                original = None
+            if line == '---':
                 section = None
+                expecting_original = False
                 continue
-            if low.startswith('[original'):         # [Original Name]
+            if low.startswith('[original'):
                 section = 'original'
-                original = None
+                expecting_original = True
                 continue
             if low.startswith('[alternativ') or low.startswith('[alias'):
-                section = 'alternatives'            # [Alternative Names]
+                section = 'alternatives'
                 continue
-
-            # --- content line ---
             if section == 'original':
-                if original is None:
-                    # First line under [Original Name] is the canonical name;
-                    # it is also an alias of itself so queries for it resolve.
-                    original = line
-                    register(line, line)
+                if expecting_original:
+                    blocks.append([line, []])     # new block: the canonical name
+                    expecting_original = False
                 else:
-                    # Extra lines under [Original Name] (no explicit
-                    # [Alternative Names] header) are treated as alternatives.
-                    register(line, original)
-            elif section == 'alternatives':
-                if original is not None:
-                    register(line, original)
-                # else: alternatives listed before any original -- ignore safely
-            # section is None (content before any header) -> ignore
+                    blocks[-1][1].append(line)    # extra lines = alternatives
+            elif section == 'alternatives' and blocks:
+                blocks[-1][1].append(line)
+
+        # Build the maps. Every spelling resolves by exact match; the FOLD
+        # tokens are the alternatives if any were given, otherwise the original
+        # itself. This lets an ambiguous grade (e.g. 456) list a prefixed code
+        # "Py456" so only that family folds — the bare number "456" stays an
+        # exact-match-only display name and never swallows "BY456".
+        for original, alts in blocks:
+            match_map[_match_key(original)] = original
+            for alt in alts:
+                match_map[_match_key(alt)] = original
+            for token in (alts or [original]):
+                add_fold_token(token, original)
 
         commit()

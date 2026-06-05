@@ -122,15 +122,15 @@ class PolymerParser:
             if not is_valid_polymer_name(name):
                 return None
 
-            # CRITICAL CHECK: ensure the price is NOT just the digits of the
-            # name itself — prevents "BL5200" parsing as price 5200, etc.
+            # Ensure the matched "price" is not literally the name's own code
+            # (e.g. "BL5200" with 5200). The >= 10000 floor below already drops
+            # short code-numbers, so we only reject an EXACT digits match — a
+            # real 5-digit price that merely starts with the grade number
+            # (grade 170 at 17000, grade 150 at 15000) is kept.
             last_part = name.split()[-1] if name.split() else ""
-            if last_part and any(c.isdigit() for c in last_part):
-                digits_in_name = ''.join(c for c in last_part if c.isdigit())
-                if digits_in_name == price_str or price_str.startswith(digits_in_name):
-                    return None
-                if price_str == digits_in_name or digits_in_name.startswith(price_str):
-                    return None
+            digits_in_name = ''.join(c for c in last_part if c.isdigit())
+            if digits_in_name and digits_in_name == price_str:
+                return None
 
             try:
                 price = float(price_str.replace(',', '.'))
@@ -299,18 +299,14 @@ If no polymers with explicit prices found, return an empty array: []
                                 if not is_valid_polymer_name(polymer_name):
                                     continue
 
-                                # Double-check: ensure price is not derived from polymer name
-                                name_parts = polymer_name.split()
-                                last_part = name_parts[-1] if name_parts else ""
-
-                                # Extract digits from last part of name
-                                if last_part and any(c.isdigit() for c in last_part):
-                                    digits_in_name = ''.join(c for c in last_part if c.isdigit())
-                                    price_str = str(int(price))
-
-                                    # Skip if price matches digits in name
-                                    if digits_in_name == price_str or price_str.startswith(digits_in_name) or digits_in_name.startswith(price_str):
-                                        continue
+                                # Skip only if the price is EXACTLY the name's
+                                # own code (e.g. "BL5200" -> 5200). A real price
+                                # that just starts with the grade number (170 ->
+                                # 17000) must be kept.
+                                last_part = polymer_name.split()[-1] if polymer_name.split() else ""
+                                digits_in_name = ''.join(c for c in last_part if c.isdigit())
+                                if digits_in_name and digits_in_name == str(int(price)):
+                                    continue
 
                                 validated_results.append({
                                     'polymer_name': polymer_name,

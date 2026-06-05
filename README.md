@@ -571,17 +571,22 @@ That makes `2200`, `J-2200`, `Uz-Kor Gas J-2200`, `2200 repack`,
 number is matched wherever it appears as a whole number and the surrounding
 words are dropped.
 
-Short numbers (1–2 digits) are ambiguous on their own — a bare `3` would also
-catch `SG3` / `CK-30` / `30%`. For those, add the prefixed grade code so it
-folds the right family only:
+When the **same number is used by two different grade families** (e.g. `456`
+exists as both `Py456` and `By456`, or `3` would also catch `SG3`/`30%`), the
+bare number is unsafe. List the prefixed grade code under `[Alternative Names]`
+— then only that family folds and the bare number is matched exactly, never on
+its own:
 
 ```
 [Original Name]
-3
+456
 
 [Alternative Names]
-BL3
+Py456
 ```
+
+`Py456` / `P-Y456` / `PY 456` → `456`, while `By456` stays separate. (Same for
+`130`→`Y130`, `170`→`Fr170`, `150`→`J150`, `30`→`D30`, `3`→`BL3`.)
 
 - `30% TiO2` and other percentages are never read as a grade number; leading
   zeros matter (`030` ≠ `30`).
