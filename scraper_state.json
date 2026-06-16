@@ -1,54 +1,54 @@
 {
   "chats": {
     "-1001634518795": {
-      "last_message_id": 378612,
-      "last_scrape_time": "2026-06-05T14:23:04.675384"
+      "last_message_id": 380470,
+      "last_scrape_time": "2026-06-16T14:35:52.356983"
     },
     "-1002045268929": {
-      "last_message_id": 343030,
-      "last_scrape_time": "2026-06-05T14:25:31.364758"
+      "last_message_id": 349972,
+      "last_scrape_time": "2026-06-16T15:04:03.007664"
     },
     "-1001924188278": {
-      "last_message_id": 93058,
-      "last_scrape_time": "2026-06-05T14:25:58.418853"
+      "last_message_id": 94315,
+      "last_scrape_time": "2026-06-16T14:35:55.640589"
     },
     "-1001885154496": {
-      "last_message_id": 1056575,
-      "last_scrape_time": "2026-06-05T14:26:36.418801"
+      "last_message_id": 1058918,
+      "last_scrape_time": "2026-06-16T15:04:05.853831"
     },
     "-1001364340328": {
-      "last_message_id": 567491,
-      "last_scrape_time": "2026-06-05T14:27:17.242722"
+      "last_message_id": 568987,
+      "last_scrape_time": "2026-06-16T15:03:15.065148"
     },
     "-1001909406960": {
-      "last_message_id": 650842,
-      "last_scrape_time": "2026-06-05T10:17:13.818192"
+      "last_message_id": 650854,
+      "last_scrape_time": "2026-06-16T07:39:09.619327"
     },
     "-1001335171601": {
-      "last_message_id": 1369325,
-      "last_scrape_time": "2026-06-05T14:35:46.860573"
+      "last_message_id": 1372869,
+      "last_scrape_time": "2026-06-16T15:04:09.263685"
     },
     "-1002318606773": {
-      "last_message_id": 256380,
-      "last_scrape_time": "2026-06-05T14:37:39.534014"
+      "last_message_id": 260418,
+      "last_scrape_time": "2026-06-16T15:04:11.024685"
     },
     "-1001404639401": {
-      "last_message_id": 3504,
-      "last_scrape_time": "2026-06-05T10:20:45.194161"
+      "last_message_id": 3522,
+      "last_scrape_time": "2026-06-16T12:09:46.690096"
     },
     "-1001291571518": {
-      "last_message_id": 481935,
-      "last_scrape_time": "2026-06-05T14:38:28.353921"
+      "last_message_id": 483386,
+      "last_scrape_time": "2026-06-16T15:03:40.250962"
     },
     "-1001675731642": {
-      "last_message_id": 2476,
-      "last_scrape_time": "2026-06-05T10:21:20.040587"
+      "last_message_id": 2493,
+      "last_scrape_time": "2026-06-16T12:10:39.663527"
     },
     "-1002091314577": {
-      "last_message_id": 315,
-      "last_scrape_time": "2026-06-05T10:21:16.279252"
+      "last_message_id": 324,
+      "last_scrape_time": "2026-06-16T12:10:37.745438"
     }
   },
-  "last_cleanup_time": "2026-06-05T14:38:30.449524",
+  "last_cleanup_time": "2026-06-16T15:04:14.316881",
   "data_retention_days": 21
 }
